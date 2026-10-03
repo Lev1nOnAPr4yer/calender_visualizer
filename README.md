@@ -2,6 +2,17 @@
 
 A small Windows desktop program that turns plain `.md` / `.txt` event lists into a week calendar.
 
+## Download
+
+**[⬇ Download the latest release](https://github.com/zd82pxt4kr-alt/calender_visualizer/releases/latest)**
+
+1. Under *Assets*, download **`CalendarVisualizer.exe`**. It's a single file and needs no installation.
+2. Double-click it. The first time, Windows may say *"Windows protected your PC"* because the program isn't
+   code-signed. Click **More info → Run anyway**.
+3. Also download **`AI_SYNTAX_GUIDE.md`** if you want an AI agent to write calendar files for you.
+
+## Features
+
 - **Import** reads a `.md`/`.txt` file and replaces the calendar with its events.
 - **Add** reads a file and merges its events into the current calendar. Exact duplicates are skipped.
 - **Export .md** saves the calendar back to the same readable syntax, so you can re-import it later.
@@ -45,26 +56,22 @@ The full specification is in [`AI_SYNTAX_GUIDE.md`](AI_SYNTAX_GUIDE.md), and [`e
 | Jump to a date | *Go to date…* |
 | Shortcuts | Ctrl+O import, Ctrl+A add, Ctrl+S export .md, Ctrl+E export image |
 
-## Getting the .exe
+## Publishing a new version
 
-**From GitHub Actions:** every push runs the *Build Windows exe* workflow. Open the run and download the
-`CalendarVisualizer-windows` artifact. If you push a tag such as `v1.0.0`, the exe is also attached to a GitHub Release.
+GitHub builds the exe for you. You never have to build anything on your PC.
 
-**Build it yourself on Windows** (needs Python 3.10+ from python.org):
+1. On github.com, edit `calviz/__init__.py` and raise the version, e.g. `__version__ = "1.1.0"`.
+2. Commit the change to the default branch.
+3. The *Build Windows exe* workflow tests and builds the exe, then publishes Release **v1.1.0** with the exe attached.
 
-```bat
-build.bat
-```
+A push that doesn't change the version still runs the tests and the build, but doesn't touch the existing release.
 
-The result is `dist\CalendarVisualizer.exe`, a single file with no installation needed.
-
-## Running from source
+## For developers
 
 ```bash
 pip install -r requirements-dev.txt
 python run_calviz.py          # start the GUI
 python -m pytest -q           # run the tests
-python run_calviz.py --selftest
 ```
 
 ## Project layout
