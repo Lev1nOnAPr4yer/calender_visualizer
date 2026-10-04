@@ -85,6 +85,8 @@ jobs:
 
             - `AI_SYNTAX_GUIDE.md`: give this file to your AI agent so it can write calendar files for you.
             - `sample.md`: an example calendar file you can import.
+
+            **To remove it completely:** click Help → *Remove all my data and quit…*, then delete `CalendarVisualizer.exe`. It has no installer and makes no registry entries.
           files: |
             dist/CalendarVisualizer.exe
             AI_SYNTAX_GUIDE.md

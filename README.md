@@ -11,6 +11,23 @@ A small Windows desktop program that turns plain `.md` / `.txt` event lists into
    code-signed. Click **More info → Run anyway**.
 3. Also download **`AI_SYNTAX_GUIDE.md`** if you want an AI agent to write calendar files for you.
 
+## Removing it completely
+
+The program has no installer and writes nothing to the registry. It only ever creates two things:
+
+| What | Where |
+|---|---|
+| The program | wherever you saved `CalendarVisualizer.exe` |
+| Your saved calendar | `%APPDATA%\CalendarVisualizer\` (created the first time you import or add something) |
+
+To remove everything:
+
+1. In the program, click **Help → Remove all my data and quit…**. This deletes the `%APPDATA%\CalendarVisualizer` folder.
+2. Delete `CalendarVisualizer.exe`.
+
+That's all. If you've already deleted the exe, paste `%APPDATA%` into the Explorer address bar and delete the `CalendarVisualizer` folder yourself.
+Any `.md` or image files you exported stay wherever you saved them.
+
 ## Features
 
 - **Import** reads a `.md`/`.txt` file and replaces the calendar with its events.

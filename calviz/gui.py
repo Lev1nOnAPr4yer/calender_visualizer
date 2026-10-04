@@ -93,6 +93,7 @@ class App(tk.Tk):
         m_help.add_command(label="Save AI syntax guide (.md)…", command=self.save_guide)
         m_help.add_command(label="Save example file…", command=self.save_sample)
         m_help.add_command(label="Open autosave folder", command=self.open_data_dir)
+        m_help.add_command(label="Remove all my data and quit…", command=self.remove_data_and_quit)
         m_help.add_separator()
         m_help.add_command(label="About", command=self.about)
         menubar.add_cascade(label="Help", menu=m_help)
@@ -321,10 +322,30 @@ class App(tk.Tk):
 
     def open_data_dir(self) -> None:
         folder = str(storage.data_dir())
+        if not os.path.isdir(folder):
+            messagebox.showinfo("Autosave folder", f"Nothing has been saved yet.\n\n{folder}")
+            return
         if hasattr(os, "startfile"):
             os.startfile(folder)  # type: ignore[attr-defined]
         else:
             messagebox.showinfo("Autosave folder", folder)
+
+    def remove_data_and_quit(self) -> None:
+        folder = storage.data_dir()
+        if not messagebox.askyesno(
+            "Remove all my data",
+            f"This deletes the saved calendar and the folder\n{folder}\nthen closes the program.\n\n"
+            "Export your calendar first if you want to keep it. Continue?",
+            icon="warning",
+        ):
+            return
+        storage.remove_all_data()
+        messagebox.showinfo(
+            "Data removed",
+            "All data has been removed.\n\nTo remove the program itself, delete CalendarVisualizer.exe. "
+            "Nothing else is left on your PC.",
+        )
+        self.destroy()
 
     def about(self) -> None:
         messagebox.showinfo(
