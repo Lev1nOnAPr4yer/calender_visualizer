@@ -4,7 +4,7 @@ A small Windows desktop program that turns plain `.md` / `.txt` event lists into
 
 ## Download
 
-**[⬇ Download the latest release](https://github.com/zd82pxt4kr-alt/calender_visualizer/releases/latest)**
+**[⬇ Download the latest release](https://github.com/Lev1nOnAPr4yer/calender_visualizer/releases/latest)**
 
 1. Under *Assets*, download **`CalendarVisualizer.exe`**. It's a single file and needs no installation.
 2. Double-click it. The first time, Windows may say *"Windows protected your PC"* because the program isn't
