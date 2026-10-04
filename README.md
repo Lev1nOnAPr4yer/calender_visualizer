@@ -33,7 +33,7 @@ Any `.md` or image files you exported stay wherever you saved them.
 - **Import** reads a `.md`/`.txt` file and replaces the calendar with its events.
 - **Add** reads a file and merges its events into the current calendar. Exact duplicates are skipped.
 - **Export .md** saves the calendar back to the same readable syntax, so you can re-import it later.
-- **Export Image** saves a high-resolution PNG/JPEG of the week view: the weekly planner, the current week, or every week that has dated entries. Scale 2×–6× gives images up to 8400 px wide.
+- **Export Image** saves a high-resolution PNG image of the week view: the weekly planner, the current week, or every week that has dated entries. Scale 2×–6× gives images up to 8400 px wide.
 - **[`AI_SYNTAX_GUIDE.md`](AI_SYNTAX_GUIDE.md)** is a file you hand to your AI agent so it can write calendar files for you. The exe also contains it: Help → *Save AI syntax guide*.
 
 The calendar autosaves (to `%APPDATA%\CalendarVisualizer\calendar.md`) and is restored when you start the program.

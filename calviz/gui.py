@@ -15,7 +15,7 @@ from . import __version__, storage
 from .model import PLANNER_WEEK, WEEKDAYS, Calendar, Event, fmt_date, today, week_start
 from .parser import ParseResult, parse_date, parse_file
 from .render import RenderResult, export_week, render_week
-from .resources import AI_GUIDE, ICON_PNG, SAMPLE, SAMPLE_DATED
+from .resources import AI_GUIDE, ICON_PNG
 from .writer import to_markdown
 
 FILETYPES_IN = [("Calendar text", "*.md *.txt"), ("Markdown", "*.md"), ("Text", "*.txt"), ("All files", "*.*")]
@@ -98,8 +98,6 @@ class App(tk.Tk):
 
         m_help = tk.Menu(menubar, tearoff=False)
         m_help.add_command(label="Save AI syntax guide (.md)…", command=self.save_guide)
-        m_help.add_command(label="Save example: weekly planner…", command=self.save_sample)
-        m_help.add_command(label="Save example: dated calendar…", command=lambda: self._save_copy(SAMPLE_DATED, "sample-dated.md"))
         m_help.add_command(label="Open autosave folder", command=self.open_data_dir)
         m_help.add_command(label="Remove all my data and quit…", command=self.remove_data_and_quit)
         m_help.add_separator()
@@ -265,6 +263,7 @@ class App(tk.Tk):
         ttk.Button(btns, text="Delete", command=delete).pack(side="left")
         ttk.Button(btns, text="Close", command=win.destroy).pack(side="right")
         win.bind("<Escape>", lambda e: win.destroy())
+        center_over(win, self)
 
     # --- file actions ----------------------------------------------------------
 
@@ -327,6 +326,7 @@ class App(tk.Tk):
         txt.config(state="disabled")
         txt.pack(fill="both", expand=True)
         ttk.Button(frm, text="OK", command=win.destroy).pack(anchor="e", pady=(8, 0))
+        center_over(win, self)
 
     def export_md(self) -> None:
         path = filedialog.asksaveasfilename(
@@ -355,16 +355,10 @@ class App(tk.Tk):
             self.changed()
 
     def save_guide(self) -> None:
-        self._save_copy(AI_GUIDE, "AI_SYNTAX_GUIDE.md")
-
-    def save_sample(self) -> None:
-        self._save_copy(SAMPLE, "sample.md")
-
-    def _save_copy(self, src, name: str) -> None:
-        path = filedialog.asksaveasfilename(parent=self, initialfile=name, defaultextension=".md",
+        path = filedialog.asksaveasfilename(parent=self, initialfile="AI_SYNTAX_GUIDE.md", defaultextension=".md",
                                             filetypes=[("Markdown", "*.md")])
         if path:
-            shutil.copyfile(src, path)
+            shutil.copyfile(AI_GUIDE, path)
 
     def open_data_dir(self) -> None:
         folder = str(storage.data_dir())
@@ -413,7 +407,6 @@ class ExportImageDialog(tk.Toplevel):
 
         self.scope = tk.StringVar(value="current")
         self.scale = tk.StringVar(value="3")
-        self.fmt = tk.StringVar(value="PNG")
 
         ttk.Label(frm, text="Weeks", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky="w")
         if app.dated:
@@ -431,28 +424,24 @@ class ExportImageDialog(tk.Toplevel):
         for s in ("2", "3", "4", "6"):
             ttk.Radiobutton(res, text=f"{s}×  ({1400 * int(s)} px wide)", value=s, variable=self.scale).pack(anchor="w")
 
-        ttk.Label(frm, text="Format", font=("TkDefaultFont", 10, "bold")).grid(row=5, column=0, sticky="w", pady=(12, 0))
-        f = ttk.Frame(frm)
-        f.grid(row=6, column=0, columnspan=2, sticky="w")
-        ttk.Radiobutton(f, text="PNG (best quality)", value="PNG", variable=self.fmt).pack(side="left")
-        ttk.Radiobutton(f, text="JPEG (smaller file)", value="JPEG", variable=self.fmt).pack(side="left", padx=10)
-
         btns = ttk.Frame(frm)
-        btns.grid(row=7, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        btns.grid(row=5, column=0, columnspan=2, sticky="e", pady=(16, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="right")
-        ttk.Button(btns, text="Export…", command=self.run).pack(side="right", padx=6)
+        ttk.Button(btns, text="Export PNG…", command=self.run).pack(side="right", padx=6)
+        self.bind("<Escape>", lambda e: self.destroy())
+        center_over(self, app)
 
     def run(self) -> None:
         app = self.app
         scale = float(self.scale.get())
-        ext = ".png" if self.fmt.get() == "PNG" else ".jpg"
+        ext = ".png"
         base = _safe_name(app.cal.title or "calendar")
         if not app.dated or self.scope.get() == "current":
             label = _week_label(app.week) if app.dated else "weekly-planner"
             path = filedialog.asksaveasfilename(
                 parent=self, title="Save image", defaultextension=ext,
                 initialfile=f"{base}_{label}{ext}",
-                filetypes=[("PNG image", "*.png"), ("JPEG image", "*.jpg *.jpeg")],
+                filetypes=[("PNG image", "*.png")],
             )
             if not path:
                 return
@@ -476,6 +465,19 @@ class ExportImageDialog(tk.Toplevel):
             self.config(cursor="")
             app.status.config(text=f"Saved {len(weeks)} images to {folder}")
         self.destroy()
+
+
+def center_over(win: tk.Toplevel, parent: tk.Misc) -> None:
+    """Show a popup centred over the main window instead of the screen's top-left corner."""
+    win.withdraw()  # hide until positioned, so it doesn't flash in the corner
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
+    y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+    x = max(0, min(x, win.winfo_screenwidth() - w))
+    y = max(0, min(y, win.winfo_screenheight() - h))
+    win.geometry(f"+{x}+{y}")
+    win.deiconify()
 
 
 def _week_label(d: date) -> str:

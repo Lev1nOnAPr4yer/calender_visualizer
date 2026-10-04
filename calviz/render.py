@@ -383,8 +383,4 @@ def header_texts(week_start: date, show_dates: bool) -> tuple[str, list[tuple[st
 
 def export_week(cal: Calendar, week_start: date, path: str, scale: float = 3.0, show_dates: bool = True) -> None:
     result = render_week(cal, week_start, scale=scale, highlight_today=False, show_dates=show_dates)
-    img = result.image
-    if path.lower().endswith((".jpg", ".jpeg")):
-        img.save(path, quality=95, dpi=(72 * scale, 72 * scale))
-    else:
-        img.save(path, dpi=(72 * scale, 72 * scale))
+    result.image.save(path, dpi=(72 * scale, 72 * scale))
