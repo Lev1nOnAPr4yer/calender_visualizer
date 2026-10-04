@@ -12,10 +12,10 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from PIL import ImageTk
 
 from . import __version__, storage
-from .model import Calendar, Event, today, week_start
+from .model import PLANNER_WEEK, WEEKDAYS, Calendar, Event, fmt_date, today, week_start
 from .parser import ParseResult, parse_date, parse_file
 from .render import RenderResult, export_week, render_week
-from .resources import AI_GUIDE, ICON_PNG, SAMPLE
+from .resources import AI_GUIDE, ICON_PNG, SAMPLE, SAMPLE_DATED
 from .writer import to_markdown
 
 FILETYPES_IN = [("Calendar text", "*.md *.txt"), ("Markdown", "*.md"), ("Text", "*.txt"), ("All files", "*.*")]
@@ -39,6 +39,11 @@ class App(tk.Tk):
             messagebox.showwarning("Calendar Visualizer", f"Could not load the saved calendar:\n{exc}")
             self.cal = Calendar()
         self.week = week_start(today())
+        if self.cal.is_dated():  # open on the current week, or the next week that has dated entries
+            weeks = self.cal.weeks_with_events()
+            upcoming = [w for w in weeks if w >= self.week]
+            if self.week not in weeks:
+                self.week = upcoming[0] if upcoming else weeks[-1]
         self.ui_scale = max(1.0, self.winfo_fpixels("1i") / 96)
         self._render: RenderResult | None = None
         self._photo: ImageTk.PhotoImage | None = None
@@ -51,6 +56,7 @@ class App(tk.Tk):
         self.status = ttk.Label(self, anchor="w", padding=(8, 3))
         self.status.pack(fill="x", side="bottom")
 
+        # Redraw continuously while the window is being resized (not only when the drag ends).
         self.canvas.bind("<Configure>", lambda e: self.schedule_redraw())
         self.canvas.bind("<Button-1>", self.on_click)
         self.canvas.bind("<Motion>", self.on_motion)
@@ -88,10 +94,12 @@ class App(tk.Tk):
         m_view.add_command(label="Go to date…", command=self.go_to_date)
         m_view.add_command(label="First event", command=self.go_first)
         menubar.add_cascade(label="View", menu=m_view)
+        self.m_view = m_view
 
         m_help = tk.Menu(menubar, tearoff=False)
         m_help.add_command(label="Save AI syntax guide (.md)…", command=self.save_guide)
-        m_help.add_command(label="Save example file…", command=self.save_sample)
+        m_help.add_command(label="Save example: weekly planner…", command=self.save_sample)
+        m_help.add_command(label="Save example: dated calendar…", command=lambda: self._save_copy(SAMPLE_DATED, "sample-dated.md"))
         m_help.add_command(label="Open autosave folder", command=self.open_data_dir)
         m_help.add_command(label="Remove all my data and quit…", command=self.remove_data_and_quit)
         m_help.add_separator()
@@ -110,32 +118,55 @@ class App(tk.Tk):
         ]:
             ttk.Button(bar, text=text, command=cmd).pack(side="left", padx=2)
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
-        ttk.Button(bar, text="◀", width=3, command=lambda: self.shift_week(-1)).pack(side="left", padx=2)
-        ttk.Button(bar, text="Today", command=self.go_today).pack(side="left", padx=2)
-        ttk.Button(bar, text="▶", width=3, command=lambda: self.shift_week(1)).pack(side="left", padx=2)
-        ttk.Button(bar, text="Go to date…", command=self.go_to_date).pack(side="left", padx=6)
+        self.nav_buttons = [
+            ttk.Button(bar, text="◀", width=3, command=lambda: self.shift_week(-1)),
+            ttk.Button(bar, text="Today", command=self.go_today),
+            ttk.Button(bar, text="▶", width=3, command=lambda: self.shift_week(1)),
+            ttk.Button(bar, text="Go to date…", command=self.go_to_date),
+        ]
+        for b in self.nav_buttons:
+            b.pack(side="left", padx=2)
 
     # --- drawing -------------------------------------------------------------
 
+    @property
+    def dated(self) -> bool:
+        """Real weeks are shown only once some entry has a date; before that it is a weekly planner."""
+        return self.cal.is_dated()
+
     def schedule_redraw(self) -> None:
-        if self._redraw_job:
-            self.after_cancel(self._redraw_job)
-        self._redraw_job = self.after(60, self.redraw)
+        # Coalesce a burst of resize events into one render as soon as Tk is idle.
+        # No timer: the view follows the mouse while the window is being dragged.
+        if self._redraw_job is None:
+            self._redraw_job = self.after_idle(self.redraw)
 
     def redraw(self) -> None:
-        self._redraw_job = None
+        if self._redraw_job is not None:
+            self.after_cancel(self._redraw_job)
+            self._redraw_job = None
         w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
         if w < 50 or h < 50:
             return
         s = self.ui_scale
-        self._render = render_week(self.cal, self.week, scale=s, width=int(w / s), height=int(h / s))
+        dated = self.dated
+        self._render = render_week(
+            self.cal, self.week if dated else PLANNER_WEEK, scale=s,
+            width=int(w / s), height=int(h / s), show_dates=dated,
+        )
         self._photo = ImageTk.PhotoImage(self._render.image)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self._photo, anchor="nw")
+        self._update_nav(dated)
         n = len(self.cal.events)
-        self.status.config(
-            text=f"{n} event{'s' if n != 1 else ''}  ·  click an event for details  ·  autosaved to {storage.autosave_path()}"
-        )
+        mode = "dated calendar" if dated else "weekly planner (add entries with a date to switch to real weeks)"
+        self.status.config(text=f"{n} entr{'ies' if n != 1 else 'y'}  ·  {mode}  ·  click an entry for details")
+
+    def _update_nav(self, dated: bool) -> None:
+        state = "normal" if dated else "disabled"
+        for b in self.nav_buttons:
+            b.config(state=state)
+        for i in range(5):
+            self.m_view.entryconfig(i, state=state)
 
     def changed(self) -> None:
         try:
@@ -144,13 +175,22 @@ class App(tk.Tk):
             messagebox.showwarning("Autosave failed", str(exc))
         self.redraw()
 
+    def _show_first_dated_week(self, events) -> None:
+        dates = [e.date for e in events if e.dated]
+        if dates:
+            self.week = week_start(min(dates))
+
     # --- navigation ----------------------------------------------------------
 
     def shift_week(self, n: int) -> None:
+        if not self.dated:
+            return
         self.week += timedelta(weeks=n)
         self.redraw()
 
     def go_today(self) -> None:
+        if not self.dated:
+            return
         self.week = week_start(today())
         self.redraw()
 
@@ -161,12 +201,14 @@ class App(tk.Tk):
             self.redraw()
 
     def go_to_date(self) -> None:
-        text = simpledialog.askstring("Go to date", "Date (YYYY-MM-DD):", parent=self)
+        if not self.dated:
+            return
+        text = simpledialog.askstring("Go to date", "Date (DD.MM.YYYY):", parent=self)
         if not text:
             return
         d = parse_date(text)
         if d is None:
-            messagebox.showerror("Go to date", f"'{text}' is not a valid date. Use YYYY-MM-DD.")
+            messagebox.showerror("Go to date", f"'{text}' is not a valid date. Use DD.MM.YYYY.")
             return
         self.week = week_start(d)
         self.redraw()
@@ -185,6 +227,10 @@ class App(tk.Tk):
             self.show_event(hb.event, hb.occurrence)
 
     def show_event(self, ev: Event, occurrence: date) -> None:
+        if ev.dated:
+            when = f"{WEEKDAYS[occurrence.weekday()]}, {fmt_date(occurrence)}"
+        else:
+            when = f"Every {ev.day_name}"
         win = tk.Toplevel(self)
         win.title(ev.title)
         win.transient(self)
@@ -192,9 +238,9 @@ class App(tk.Tk):
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
         ttk.Label(frm, text=ev.title, font=("TkDefaultFont", 13, "bold"), wraplength=380).pack(anchor="w")
-        rows = [("When", f"{occurrence:%A, %Y-%m-%d}  ·  {ev.time_label()}")]
+        rows = [("When", f"{when}  ·  {ev.time_label()}")]
         if ev.repeat:
-            rows.append(("Repeats", f"{ev.repeat.describe()} (series starts {ev.date.isoformat()})"))
+            rows.append(("Repeats", f"{ev.repeat.describe()} (series starts {fmt_date(ev.date)})"))
         if ev.location:
             rows.append(("Where", ev.location))
         if ev.tag:
@@ -258,7 +304,7 @@ class App(tk.Tk):
         if not self.cal.title and result.title:
             self.cal.title = result.title
         if added:
-            self.week = week_start(min(e.date for e in result.events))
+            self._show_first_dated_week(result.events)
         self.changed()
         msg = f"Added {added} event{'s' if added != 1 else ''}."
         if skipped:
@@ -370,9 +416,14 @@ class ExportImageDialog(tk.Toplevel):
         self.fmt = tk.StringVar(value="PNG")
 
         ttk.Label(frm, text="Weeks", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Radiobutton(frm, text=f"Current week ({app.week:%Y-%m-%d})", value="current", variable=self.scope).grid(row=1, column=0, columnspan=2, sticky="w")
-        n_weeks = len(app.cal.weeks_with_events())
-        ttk.Radiobutton(frm, text=f"All weeks with events ({n_weeks} images into a folder)", value="all", variable=self.scope).grid(row=2, column=0, columnspan=2, sticky="w")
+        if app.dated:
+            ttk.Radiobutton(frm, text=f"Current week ({fmt_date(app.week)} – {fmt_date(app.week + timedelta(days=6))})",
+                            value="current", variable=self.scope).grid(row=1, column=0, columnspan=2, sticky="w")
+            n_weeks = len(app.cal.weeks_with_events())
+            ttk.Radiobutton(frm, text=f"All weeks with dated entries ({n_weeks} images into a folder)", value="all",
+                            variable=self.scope).grid(row=2, column=0, columnspan=2, sticky="w")
+        else:
+            ttk.Label(frm, text="The weekly planner (one image)").grid(row=1, column=0, columnspan=2, sticky="w")
 
         ttk.Label(frm, text="Resolution", font=("TkDefaultFont", 10, "bold")).grid(row=3, column=0, sticky="w", pady=(12, 0))
         res = ttk.Frame(frm)
@@ -396,20 +447,24 @@ class ExportImageDialog(tk.Toplevel):
         scale = float(self.scale.get())
         ext = ".png" if self.fmt.get() == "PNG" else ".jpg"
         base = _safe_name(app.cal.title or "calendar")
-        if self.scope.get() == "current":
+        if not app.dated or self.scope.get() == "current":
+            label = _week_label(app.week) if app.dated else "weekly-planner"
             path = filedialog.asksaveasfilename(
                 parent=self, title="Save image", defaultextension=ext,
-                initialfile=f"{base}_{_week_label(app.week)}{ext}",
+                initialfile=f"{base}_{label}{ext}",
                 filetypes=[("PNG image", "*.png"), ("JPEG image", "*.jpg *.jpeg")],
             )
             if not path:
                 return
-            export_week(app.cal, app.week, path, scale)
+            if app.dated:
+                export_week(app.cal, app.week, path, scale)
+            else:
+                export_week(app.cal, PLANNER_WEEK, path, scale, show_dates=False)
             app.status.config(text=f"Saved {path}")
         else:
             weeks = app.cal.weeks_with_events()
             if not weeks:
-                messagebox.showinfo("Export image", "The calendar has no events.", parent=self)
+                messagebox.showinfo("Export image", "The calendar has no dated entries.", parent=self)
                 return
             folder = filedialog.askdirectory(parent=self, title="Choose a folder for the images")
             if not folder:

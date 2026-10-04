@@ -7,6 +7,7 @@ a = Analysis(
         ("calviz/assets", "calviz/assets"),
         ("AI_SYNTAX_GUIDE.md", "."),
         ("examples/sample.md", "examples"),
+        ("examples/sample-dated.md", "examples"),
     ],
     excludes=["numpy", "pytest"],
 )

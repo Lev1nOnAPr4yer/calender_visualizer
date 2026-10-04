@@ -12,21 +12,29 @@ from pathlib import Path
 
 
 def selftest() -> int:
-    from .model import Calendar
+    from .model import PLANNER_WEEK, Calendar
     from .parser import parse_file, parse_text
     from .render import export_week
-    from .resources import AI_GUIDE, SAMPLE
+    from .resources import AI_GUIDE, SAMPLE, SAMPLE_DATED
     from .writer import to_markdown
 
     assert AI_GUIDE.exists(), "AI guide not bundled"
-    result = parse_file(str(SAMPLE))
-    assert result.events and not result.warnings, result.warnings
-    cal = Calendar(result.title, result.events)
+    planner = parse_file(str(SAMPLE))
+    dated = parse_file(str(SAMPLE_DATED))
+    for result in (planner, dated):
+        assert result.events and not result.warnings, result.warnings
+    cal = Calendar(planner.title, planner.events)
+    assert not cal.is_dated()
+    out = Path(tempfile.gettempdir()) / "calviz_selftest.png"
+    export_week(cal, PLANNER_WEEK, str(out), scale=2, show_dates=False)
+    assert out.stat().st_size > 10_000
+    cal.add(dated.events)
+    assert cal.is_dated()
     again = parse_text(to_markdown(cal))
     assert set(again.events) == set(cal.events), "markdown round-trip mismatch"
-    out = Path(tempfile.gettempdir()) / "calviz_selftest.png"
     export_week(cal, cal.first_date(), str(out), scale=2)
     assert out.stat().st_size > 10_000
+    out.unlink()
     return 0
 
 

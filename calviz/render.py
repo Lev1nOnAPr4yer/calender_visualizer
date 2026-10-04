@@ -14,7 +14,7 @@ from functools import lru_cache
 
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
-from .model import Calendar, Event, Segment, today
+from .model import WEEKDAYS, Calendar, Event, Segment, fmt_date, today
 from .resources import FONT_BOLD, FONT_REGULAR
 
 PALETTE = [
@@ -183,11 +183,14 @@ def render_week(
     width: int = 1400,
     height: int | None = None,
     highlight_today: bool = True,
+    show_dates: bool = True,
 ) -> RenderResult:
     """Render the week starting at `week_start` (a Monday).
 
     `width`/`height` are in base units; the output image is that size times
     `scale`. If `height` is None it is chosen from the visible hour range.
+    With `show_dates=False` the week is drawn as an undated weekly planner:
+    weekday names only, no dates, week numbers, months or years.
     """
     week_end = week_start + timedelta(days=6)
     segs = cal.segments(week_start, week_end)
@@ -195,6 +198,11 @@ def render_week(
     tags = tag_colors(cal)
     days = [week_start + timedelta(days=i) for i in range(7)]
     now_day = today()
+
+    def is_today(day: date) -> bool:
+        if not highlight_today:
+            return False
+        return day == now_day if show_dates else day.weekday() == now_day.weekday()
 
     u = scale  # base unit -> pixels
     title_h = 64
@@ -232,23 +240,20 @@ def render_week(
     grid_bottom = grid_top + hours * hour_h * u
 
     # Title
-    iso_week = week_start.isocalendar()[1]
-    if week_start.year == week_end.year:
-        span = f"{week_start:%b} {week_start.day} – {week_end:%b} {week_end.day}, {week_end.year}"
-    else:
-        span = f"{week_start:%b} {week_start.day}, {week_start.year} – {week_end:%b} {week_end.day}, {week_end.year}"
-    title = cal.title or "Calendar"
+    subtitle, headers = header_texts(week_start, show_dates)
+    title = cal.title or ("Calendar" if show_dates else "Weekly Planner")
+    if not show_dates and not cal.title:
+        subtitle = ""  # the default title already says it
     f_title = _font(round(24 * u), True)
     f_sub = _font(round(16 * u))
     d.text((pad * u, 18 * u), title, font=f_title, fill=TEXT)
-    sub = f"Week {iso_week}  ·  {span}"
-    d.text((x1, 22 * u), sub, font=f_sub, fill=MUTED, anchor="ra")
+    d.text((x1, 22 * u), subtitle, font=f_sub, fill=MUTED, anchor="ra")
 
     # Column backgrounds
     for i, day in enumerate(days):
         cx0 = x0 + i * col_w
         bg = None
-        if highlight_today and day == now_day:
+        if is_today(day):
             bg = TODAY_BG
         elif day.weekday() >= 5:
             bg = WEEKEND_BG
@@ -258,13 +263,14 @@ def render_week(
     # Day headers
     f_dname = _font(round(13 * u), True)
     f_dnum = _font(round(20 * u), True)
-    for i, day in enumerate(days):
+    for i, (day, (name, label)) in enumerate(zip(days, headers)):
         cx = x0 + i * col_w + col_w / 2
-        is_today = highlight_today and day == now_day
-        color = (37, 99, 235) if is_today else MUTED
-        d.text((cx, (title_h + 4) * u), day.strftime("%a").upper(), font=f_dname, fill=color, anchor="ma")
-        label = f"{day.day}" if day.day != 1 else f"{day.day} {day:%b}"
-        d.text((cx, (title_h + 20) * u), label, font=f_dnum, fill=(37, 99, 235) if is_today else TEXT, anchor="ma")
+        accent = (37, 99, 235) if is_today(day) else None
+        if label:
+            d.text((cx, (title_h + 4) * u), name, font=f_dname, fill=accent or MUTED, anchor="ma")
+            d.text((cx, (title_h + 20) * u), label, font=f_dnum, fill=accent or TEXT, anchor="ma")
+        else:
+            d.text((cx, (title_h + dayhead_h / 2 - 3) * u), name, font=f_dnum, fill=accent or TEXT, anchor="mm")
 
     # All-day events
     f_ev = _font(round(12 * u), True)
@@ -349,13 +355,14 @@ def render_week(
             hit.append(HitBox((bx0, by0, bx1, by1), ev, s.occurrence))
 
     # "Now" line
-    if highlight_today and week_start <= now_day <= week_end:
+    today_cols = [i for i, day in enumerate(days) if is_today(day)]
+    if today_cols:
         from datetime import datetime
 
         now = datetime.now()
         mins = now.hour * 60 + now.minute
         if first_hour * 60 <= mins <= last_hour * 60:
-            i = (now_day - week_start).days
+            i = today_cols[0]
             y = y_of(mins)
             d.line([x0 + i * col_w, y, x0 + (i + 1) * col_w, y], fill=NOW_LINE, width=max(2, round(2 * u)))
             r = 4 * u
@@ -364,8 +371,18 @@ def render_week(
     return RenderResult(img, hit)
 
 
-def export_week(cal: Calendar, week_start: date, path: str, scale: float = 3.0) -> None:
-    result = render_week(cal, week_start, scale=scale, highlight_today=False)
+def header_texts(week_start: date, show_dates: bool) -> tuple[str, list[tuple[str, str]]]:
+    """Subtitle and per-day (name, date label) texts for the week header."""
+    days = [week_start + timedelta(days=i) for i in range(7)]
+    if not show_dates:
+        return "Weekly planner", [(WEEKDAYS[d.weekday()].upper(), "") for d in days]
+    week_end = days[-1]
+    subtitle = f"Week {week_start.isocalendar()[1]}  ·  {fmt_date(week_start)} – {fmt_date(week_end)}"
+    return subtitle, [(WEEKDAYS[d.weekday()][:3].upper(), f"{d.day:02d}.{d.month:02d}.") for d in days]
+
+
+def export_week(cal: Calendar, week_start: date, path: str, scale: float = 3.0, show_dates: bool = True) -> None:
+    result = render_week(cal, week_start, scale=scale, highlight_today=False, show_dates=show_dates)
     img = result.image
     if path.lower().endswith((".jpg", ".jpeg")):
         img.save(path, quality=95, dpi=(72 * scale, 72 * scale))

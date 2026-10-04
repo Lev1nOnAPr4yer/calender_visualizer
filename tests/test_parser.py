@@ -94,9 +94,43 @@ def test_bad_lines_warn_but_do_not_crash():
 
 def test_event_without_date_warns():
     r = parse_text("- 10:00 Floating")
-    assert not r.events and "no date" in r.warnings[0]
+    assert not r.events and "no day" in r.warnings[0]
 
 
 def test_code_fence_is_transparent():
     r = parse_text("```markdown\n## 2026-10-05\n- 10:00 X\n```\n")
     assert len(r.events) == 1 and not r.warnings
+
+
+def test_weekday_heading_makes_undated_entries():
+    r = parse_text("## Monday\n- 07:00-08:00 Gym\n## Every Friday\n- all day Pizza\n")
+    assert not r.warnings
+    assert [(e.title, e.date, e.weekday) for e in r.events] == [("Gym", None, 0), ("Pizza", None, 4)]
+
+
+def test_inline_weekday_and_german_names():
+    r = parse_text("- Friday 18:00 Pizza\n## Montag\n- 09:00 Arbeit\nSonntag:\n- 10:00 Lauf\n")
+    assert not r.warnings
+    assert [(e.title, e.weekday) for e in r.events] == [("Pizza", 4), ("Arbeit", 0), ("Lauf", 6)]
+
+
+def test_weekday_word_in_title_is_not_a_day():
+    ev = one("## 05.10.2026\n- Monday meeting prep")
+    assert ev.date == date(2026, 10, 5) and ev.title == "Monday meeting prep"
+
+
+def test_dated_heading_overrides_weekday_heading():
+    r = parse_text("## Monday\n- 10:00 A\n## Tuesday, 06.10.2026\n- 10:00 B\n## Friday\n- 10:00 C\n")
+    assert [(e.title, e.date, e.weekday) for e in r.events] == [
+        ("A", None, 0), ("B", date(2026, 10, 6), None), ("C", None, 4)]
+
+
+def test_wrong_weekday_for_date_warns():
+    r = parse_text("## Tuesday, 05.10.2026\n- 10:00 X")
+    assert r.events[0].date == date(2026, 10, 5)
+    assert "does not match" in r.warnings[0]
+
+
+def test_repeat_on_undated_entry_is_ignored():
+    r = parse_text("## Monday\n- 10:00 X | repeat: weekly")
+    assert r.events[0].repeat is None and "repeat ignored" in r.warnings[0]

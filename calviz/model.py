@@ -9,6 +9,17 @@ from typing import Iterable, Iterator
 
 FREQUENCIES = ("daily", "weekly", "monthly", "yearly")
 
+# English names on purpose: output must not depend on the Windows locale.
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+# Internal reference week used to lay out the undated weekly planner (a Monday).
+PLANNER_WEEK = date(2001, 1, 1)
+
+
+def fmt_date(d: date) -> str:
+    """DD.MM.YYYY"""
+    return f"{d.day:02d}.{d.month:02d}.{d.year}"
+
 
 @dataclass(frozen=True)
 class Repeat:
@@ -27,7 +38,7 @@ class Repeat:
             unit = {"daily": "days", "weekly": "weeks", "monthly": "months", "yearly": "years"}[self.freq]
             text = f"every {self.interval} {unit}"
         if self.until:
-            text += f" until {self.until.isoformat()}"
+            text += f" until {fmt_date(self.until)}"
         elif self.count:
             text += f" {self.count} times"
         return text
@@ -68,8 +79,14 @@ class Repeat:
 
 @dataclass(frozen=True)
 class Event:
+    """One calendar entry.
+
+    Either `date` is set (a dated entry) or `weekday` is set (0 = Monday): an
+    undated weekly-planner entry that appears in every week.
+    """
+
     title: str
-    date: date
+    date: date | None = None
     start: time | None = None  # None means all-day
     end: time | None = None
     location: str = ""
@@ -77,6 +94,16 @@ class Event:
     color: str = ""
     notes: str = ""
     repeat: Repeat | None = None
+    weekday: int | None = None
+
+    @property
+    def dated(self) -> bool:
+        return self.date is not None
+
+    @property
+    def day_name(self) -> str:
+        wd = self.date.weekday() if self.date else self.weekday
+        return WEEKDAYS[wd]
 
     @property
     def all_day(self) -> bool:
@@ -144,16 +171,32 @@ class Calendar:
     def remove(self, event: Event) -> None:
         self.events = [e for e in self.events if e != event]
 
-    def sorted_events(self) -> list[Event]:
+    def is_dated(self) -> bool:
+        """True once any entry has a real date: the view then shows real weeks."""
+        return any(e.dated for e in self.events)
+
+    def undated_events(self) -> list[Event]:
         return sorted(
-            self.events,
+            (e for e in self.events if not e.dated),
+            key=lambda e: (e.weekday, e.start is not None, e.start or time(0), e.title.lower()),
+        )
+
+    def dated_events(self) -> list[Event]:
+        return sorted(
+            (e for e in self.events if e.dated),
             key=lambda e: (e.date, e.start is not None, e.start or time(0), e.title.lower()),
         )
 
     def first_date(self) -> date | None:
-        return min((e.date for e in self.events), default=None)
+        return min((e.date for e in self.events if e.dated), default=None)
 
-    def occurrence_dates(self, event: Event, range_end: date) -> Iterator[date]:
+    def occurrence_dates(self, event: Event, range_start: date, range_end: date) -> Iterator[date]:
+        if not event.dated:  # weekly-planner entry: every matching weekday
+            d = range_start + timedelta(days=(event.weekday - range_start.weekday()) % 7)
+            while d <= range_end:
+                yield d
+                d += timedelta(weeks=1)
+            return
         if event.repeat is None:
             if event.date <= range_end:
                 yield event.date
@@ -165,7 +208,7 @@ class Calendar:
         out: list[Segment] = []
         look_back = start - timedelta(days=1)  # catch events crossing midnight into `start`
         for ev in self.events:
-            for d in self.occurrence_dates(ev, end):
+            for d in self.occurrence_dates(ev, look_back, end):
                 if d < look_back:
                     continue
                 if ev.all_day:
@@ -183,18 +226,20 @@ class Calendar:
         return out
 
     def weeks_with_events(self) -> list[date]:
-        """Mondays of every week containing at least one event occurrence.
+        """Mondays of every week containing at least one dated event occurrence.
 
         Open-ended repeating events are only followed up to one year past the
         last dated event, so this list always stays finite.
         """
-        if not self.events:
+        dated = [e for e in self.events if e.dated]
+        if not dated:
             return []
-        last = max(e.date for e in self.events)
-        horizon = max(last, max((e.repeat.until for e in self.events if e.repeat and e.repeat.until), default=last))
+        last = max(e.date for e in dated)
+        horizon = max(last, max((e.repeat.until for e in dated if e.repeat and e.repeat.until), default=last))
         horizon = min(horizon, last + timedelta(days=366))
         mondays = set()
-        for seg in self.segments(self.first_date(), horizon + timedelta(days=1)):
+        dated_only = Calendar(events=dated)  # undated entries are in every week; they don't count
+        for seg in dated_only.segments(self.first_date(), horizon + timedelta(days=1)):
             mondays.add(week_start(seg.day))
         return sorted(mondays)
 

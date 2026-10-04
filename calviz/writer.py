@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from itertools import groupby
 
-from .model import Calendar, Event
+from .model import WEEKDAYS, Calendar, Event, fmt_date
 
 
 def _escape(s: str) -> str:
@@ -14,7 +14,7 @@ def _escape(s: str) -> str:
 def format_event(ev: Event, with_date: bool = False) -> str:
     parts = []
     if with_date:
-        parts.append(ev.date.isoformat())
+        parts.append(fmt_date(ev.date) if ev.dated else WEEKDAYS[ev.weekday])
     parts.append("all day" if ev.all_day else f"{ev.start:%H:%M}-{ev.end:%H:%M}")
     parts.append(_escape(ev.title))
     line = "- " + " ".join(parts)
@@ -34,8 +34,13 @@ def format_event(ev: Event, with_date: bool = False) -> str:
 
 def to_markdown(cal: Calendar) -> str:
     out = [f"# Calendar: {cal.title or 'My Calendar'}", ""]
-    for day, events in groupby(cal.sorted_events(), key=lambda e: e.date):
-        out.append(f"## {day:%A}, {day.isoformat()}")
+    # Weekly-planner entries (no date) first: they appear in every week.
+    for wd, events in groupby(cal.undated_events(), key=lambda e: e.weekday):
+        out.append(f"## {WEEKDAYS[wd]}")
+        out.extend(format_event(e) for e in events)
+        out.append("")
+    for day, events in groupby(cal.dated_events(), key=lambda e: e.date):
+        out.append(f"## {WEEKDAYS[day.weekday()]}, {fmt_date(day)}")
         out.extend(format_event(e) for e in events)
         out.append("")
     return "\n".join(out).rstrip() + "\n"

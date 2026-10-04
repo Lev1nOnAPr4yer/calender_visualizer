@@ -1,30 +1,33 @@
-# Calendar: Autumn Plans
+# Calendar: My Week
 
-## Monday, 2026-10-05
-- 09:00-10:30 Team meeting | at: Room 4 | tag: work
-  Bring the Q3 slides.
-- 10:00-11:00 Call with supplier | tag: work
-- 12:30 (45m) Lunch with Anna | at: Café Central | tag: friends
-- 18:00-19:00 Gym | tag: sport | repeat: weekly until 2026-12-31
+## Monday
+- 07:00-08:00 Gym | tag: sport
+- 09:00-17:00 Work | at: Office | tag: work
+- 19:00-20:30 Spanish class | at: Community college | tag: study
 
-## Tuesday, 2026-10-06
-- all day Mom's birthday | tag: family | color: pink
-- 08:00-12:00 Deep work: project report | tag: work
-- 14:00 Dentist | at: Dr. Weber, Main St. 12 | color: red
+## Tuesday
+- 09:00-17:00 Work | at: Office | tag: work
+- 18:30 (45m) Call parents | tag: family
 
-## Wednesday, 2026-10-07
-- 07:30-08:15 Morning run | tag: sport | repeat: every 2 days 4 times
-- 13:00-17:00 Workshop: Design Thinking | at: Innovation Lab | tag: work
-  Laptop and notebook needed.
-  Ask about the follow-up session.
+## Wednesday
+- 07:00-08:00 Gym | tag: sport
+- 09:00-13:00 Work (home office) | tag: work
+- 14:00-16:00 Groceries & errands | tag: home
 
-## Thursday, 2026-10-08
-- 9am-11:30am Client presentation | at: Client HQ | tag: work
+## Thursday
+- 09:00-17:00 Work | at: Office | tag: work
 - 19:30-22:00 Board game night | at: Tom's place | tag: friends
 
-## Friday, 2026-10-09
-- 15:00-16:00 Weekly review | tag: work | repeat: weekly
-- 22:00-01:00 Late concert | at: City Hall | tag: friends
+## Friday
+- 07:00-08:00 Gym | tag: sport
+- 09:00-15:00 Work | at: Office | tag: work
+- 22:00-01:00 Night out | tag: friends
 
-- 2026-10-10 10:00-13:00 Farmers market & brunch | tag: family
-- 2026-10-11 all day Hiking trip | at: Black Forest | tag: sport
+## Saturday
+- all day Weekend trip or chores | tag: home
+- 10:00-12:00 Farmers market | tag: home
+
+## Sunday
+- 10:00-11:30 Long run | tag: sport
+- 18:00 Plan next week | tag: home
+  Review the to-do list and calendar.

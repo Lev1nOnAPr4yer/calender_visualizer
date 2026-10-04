@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, time
 
-from .model import FREQUENCIES, Event, Repeat
+from .model import FREQUENCIES, WEEKDAYS, Event, Repeat
 
 
 @dataclass
@@ -36,6 +36,23 @@ _HEADING_RE = re.compile(r"^\s*(#{1,6})\s*(.*?)\s*#*\s*$")
 _FIELD_SPLIT_RE = re.compile(r"(?<!\\)\|")
 _DATE_LINE_RE = re.compile(rf"(?:[A-Za-zÄÖÜäöü]+[,:]?\s+)*(?:{_DATE_RE.pattern})\s*:?")
 
+_WEEKDAY_NAMES = {
+    0: ("monday", "mon", "montag"),
+    1: ("tuesday", "tue", "tues", "dienstag"),
+    2: ("wednesday", "wed", "mittwoch"),
+    3: ("thursday", "thu", "thur", "thurs", "donnerstag"),
+    4: ("friday", "fri", "freitag"),
+    5: ("saturday", "sat", "samstag", "sonnabend"),
+    6: ("sunday", "sun", "sonntag"),
+}
+_WEEKDAY_LOOKUP = {name: wd for wd, names in _WEEKDAY_NAMES.items() for name in names}
+_WEEKDAY_PAT = "|".join(sorted(_WEEKDAY_LOOKUP, key=len, reverse=True))
+# "Monday", "Mondays", "every Monday", "jeden Montag", "Mon." (whole text)
+_WEEKDAY_ONLY_RE = re.compile(rf"(?:(?:every|each|jeden|jeder)\s+)?(?P<wd>{_WEEKDAY_PAT})s?\.?\s*:?", re.I)
+# Leading weekday on an event line; only counts when a time or "all day" follows.
+_WEEKDAY_LEAD_RE = re.compile(rf"^(?:(?:every|each|jeden|jeder)\s+)?(?P<wd>{_WEEKDAY_PAT})s?\.?\s*[,:]?\s+(?=\d|all[\s-]?day|ganzt)", re.I)
+_WEEKDAY_WORD_RE = re.compile(rf"\b(?P<wd>{_WEEKDAY_PAT})\b", re.I)
+
 _KEY_ALIASES = {
     "at": "location", "location": "location", "where": "location", "place": "location", "ort": "location",
     "tag": "tag", "tags": "tag", "category": "tag", "type": "tag",
@@ -55,6 +72,12 @@ def parse_date(text: str) -> date | None:
         return date(int(m.group(6)), int(m.group(5)), int(m.group(4)))
     except ValueError:
         return None
+
+
+def parse_weekday(text: str) -> int | None:
+    """'Monday', 'every Monday', 'Mo...' style text -> 0..6, else None."""
+    m = _WEEKDAY_ONLY_RE.fullmatch(text.strip())
+    return _WEEKDAY_LOOKUP[m.group("wd").lower()] if m else None
 
 
 def parse_time(text: str) -> time | None:
@@ -122,18 +145,23 @@ def _unescape(s: str) -> str:
 
 # --- line level parsing ---------------------------------------------------------
 
-def _parse_event_line(body: str, current: date | None, warn) -> Event | None:
+def _parse_event_line(body: str, current: date | None, current_wd: int | None, warn) -> Event | None:
     """Parse the text of one event line (bullet already removed)."""
     rest = body.strip()
 
-    # Optional leading date ("2026-10-10 20:00 Concert" / "10.10.2026: Concert").
-    ev_date = current
+    # Optional leading date ("10.10.2026 20:00 Concert") or weekday ("Friday 18:00 Pizza").
+    ev_date, ev_wd = current, current_wd
     m = _DATE_RE.match(rest)
+    m_wd = None if m else _WEEKDAY_LEAD_RE.match(rest)
+    if m_wd:
+        ev_date, ev_wd = None, _WEEKDAY_LOOKUP[m_wd.group("wd").lower()]
+        rest = rest[m_wd.end():]
     if m:
         ev_date = parse_date(m.group(0))
         if ev_date is None:
             warn(f"invalid date '{m.group(0)}'")
             return None
+        ev_wd = None
         rest = rest[m.end():].lstrip(" :,–-\t")
         rest = rest.lstrip()
 
@@ -167,8 +195,8 @@ def _parse_event_line(body: str, current: date | None, warn) -> Event | None:
                 warn("start and end time are equal; using 1 hour")
                 end = _add_minutes(start, 60)
 
-    if ev_date is None:
-        warn("event has no date (put it under a '## YYYY-MM-DD' heading or start the line with a date)")
+    if ev_date is None and ev_wd is None:
+        warn("event has no day (put it under a '## Monday' or '## Monday, 05.10.2026' heading)")
         return None
 
     parts = _FIELD_SPLIT_RE.split(rest)
@@ -187,7 +215,9 @@ def _parse_event_line(body: str, current: date | None, warn) -> Event | None:
         return None
 
     repeat = None
-    if fields.get("repeat"):
+    if fields.get("repeat") and ev_date is None:
+        warn("repeat ignored: entries without a date already appear every week")
+    elif fields.get("repeat"):
         repeat = parse_repeat(fields["repeat"])
         if repeat is None:
             warn(f"could not understand repeat '{fields['repeat']}' (event added without repeating)")
@@ -207,6 +237,7 @@ def _parse_event_line(body: str, current: date | None, warn) -> Event | None:
         color=color,
         notes=fields.get("notes", ""),
         repeat=repeat,
+        weekday=ev_wd if ev_date is None else None,
     )
 
 
@@ -227,7 +258,8 @@ def _valid_color(c: str) -> bool:
 
 def parse_text(text: str) -> ParseResult:
     result = ParseResult()
-    current: date | None = None
+    current: date | None = None  # day set by a dated heading
+    current_wd: int | None = None  # weekday set by an undated "## Monday" heading
     last_event_index: int | None = None
     notes: list[str] = []
 
@@ -271,10 +303,14 @@ def parse_text(text: str) -> ParseResult:
         if m_head:
             heading = m_head.group(2)
             d = parse_date(heading)
+            wd = parse_weekday(heading)
             if d is not None:
-                current = d
+                current, current_wd = d, None
+                _check_weekday(heading, d, warn)
             elif _DATE_RE.search(heading):
                 warn("invalid date in heading")
+            elif wd is not None:
+                current, current_wd = None, wd
             elif len(m_head.group(1)) == 1 and not result.title:
                 title = re.sub(r"^(calendar|kalender)\s*:\s*", "", heading, flags=re.I)
                 result.title = title.strip()
@@ -286,22 +322,36 @@ def parse_text(text: str) -> ParseResult:
             if d is None:
                 warn("invalid date")
             else:
-                current = d
+                current, current_wd = d, None
+                _check_weekday(stripped, d, warn)
+            continue
+        if not _BULLET_RE.match(line) and parse_weekday(stripped) is not None:
+            current, current_wd = None, parse_weekday(stripped)
             continue
 
         body = _BULLET_RE.sub("", line, count=1)
         is_bullet = body != line
-        if not is_bullet and not (_DATE_RE.match(stripped) or _RANGE_RE.match(stripped) or _ALL_DAY_RE.match(stripped)):
+        if not is_bullet and not (
+            _DATE_RE.match(stripped) or _RANGE_RE.match(stripped) or _ALL_DAY_RE.match(stripped)
+            or _WEEKDAY_LEAD_RE.match(stripped)
+        ):
             warn("not an event line (events start with '- ')")
             continue
 
-        ev = _parse_event_line(body, current, warn)
+        ev = _parse_event_line(body, current, current_wd, warn)
         if ev is not None:
             result.events.append(ev)
             last_event_index = len(result.events) - 1
 
     flush_notes()
     return result
+
+
+def _check_weekday(text: str, d: date, warn) -> None:
+    """Warn when a heading like 'Tuesday, 05.10.2026' names the wrong weekday."""
+    m = _WEEKDAY_WORD_RE.search(_DATE_RE.sub(" ", text))
+    if m and _WEEKDAY_LOOKUP[m.group("wd").lower()] != d.weekday():
+        warn(f"{m.group('wd')} does not match the date (it is a {WEEKDAYS[d.weekday()]}); the date was used")
 
 
 def parse_file(path: str) -> ParseResult:
@@ -315,4 +365,4 @@ def parse_file(path: str) -> ParseResult:
     return parse_text(data.decode("utf-8", errors="replace"))
 
 
-__all__ = ["ParseResult", "parse_text", "parse_file", "parse_date", "parse_time", "parse_duration", "parse_repeat"]
+__all__ = ["ParseResult", "parse_text", "parse_file", "parse_date", "parse_time", "parse_duration", "parse_repeat", "parse_weekday"]
