@@ -14,7 +14,7 @@ from PIL import ImageTk
 from . import __version__, storage
 from .model import PLANNER_WEEK, WEEKDAYS, Calendar, Event, fmt_date, today, week_start
 from .parser import ParseResult, parse_date, parse_entry, parse_file
-from .render import RenderResult, export_week, render_week
+from .render import RenderResult, export_week, render_week, tag_colors
 from .resources import AI_GUIDE, ICON_PNG
 from .writer import to_markdown
 
@@ -48,6 +48,8 @@ class App(tk.Tk):
         self._render: RenderResult | None = None
         self._photo: ImageTk.PhotoImage | None = None
         self._redraw_job: str | None = None
+        # "Weekly routine only": hide dated entries everywhere (view + exports) without deleting them.
+        self.routine_only = tk.BooleanVar(value=False)
 
         self._build_menu()
         self._build_toolbar()
@@ -74,6 +76,7 @@ class App(tk.Tk):
         ]:
             self.bind(key, lambda e, a=action: None if e.widget is self.quick else a())
         self.bind("<Control-n>", lambda e: self.focus_quick_add())
+        self.bind("<Control-r>", lambda e: (self.routine_only.set(not self.routine_only.get()), self.toggled_routine()))
 
     # --- layout --------------------------------------------------------------
 
@@ -99,6 +102,9 @@ class App(tk.Tk):
         m_view.add_command(label="This week", command=self.go_today)
         m_view.add_command(label="Go to date…", command=self.go_to_date)
         m_view.add_command(label="First event", command=self.go_first)
+        m_view.add_separator()
+        m_view.add_checkbutton(label="Weekly routine only (hide dated entries)", accelerator="Ctrl+R",
+                               variable=self.routine_only, command=self.toggled_routine)
         menubar.add_cascade(label="View", menu=m_view)
         self.m_view = m_view
 
@@ -130,6 +136,8 @@ class App(tk.Tk):
         ]
         for b in self.nav_buttons:
             b.pack(side="left", padx=2)
+        ttk.Checkbutton(bar, text="Weekly routine only", variable=self.routine_only,
+                        command=self.toggled_routine).pack(side="left", padx=(8, 2))
 
         # Quick add: one entry typed as "Mo, 8-9, Schoolwork, tag: Uni"
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
@@ -150,7 +158,21 @@ class App(tk.Tk):
     @property
     def dated(self) -> bool:
         """Real weeks are shown only once some entry has a date; before that it is a weekly planner."""
-        return self.cal.is_dated()
+        return self.view_cal.is_dated()
+
+    @property
+    def view_cal(self) -> Calendar:
+        """What is shown and exported: everything, or only the undated weekly routine."""
+        if self.routine_only.get():
+            return Calendar(self.cal.title, [e for e in self.cal.events if not e.dated])
+        return self.cal
+
+    def toggled_routine(self) -> None:
+        self.redraw()
+        if self.routine_only.get():
+            hidden = sum(1 for e in self.cal.events if e.dated)
+            self.status.config(text=f"Weekly routine only: {hidden} dated entr{'ies are' if hidden != 1 else 'y is'} "
+                                    "hidden (not deleted). Turn the toggle off to show them again.")
 
     def schedule_redraw(self) -> None:
         # Coalesce a burst of resize events into one render as soon as Tk is idle.
@@ -168,15 +190,20 @@ class App(tk.Tk):
         s = self.ui_scale
         dated = self.dated
         self._render = render_week(
-            self.cal, self.week if dated else PLANNER_WEEK, scale=s,
-            width=int(w / s), height=int(h / s), show_dates=dated,
+            self.view_cal, self.week if dated else PLANNER_WEEK, scale=s,
+            width=int(w / s), height=int(h / s), show_dates=dated, tags=tag_colors(self.cal),
         )
         self._photo = ImageTk.PhotoImage(self._render.image)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self._photo, anchor="nw")
         self._update_nav(dated)
-        n = len(self.cal.events)
-        mode = "dated calendar" if dated else "weekly planner (add entries with a date to switch to real weeks)"
+        n = len(self.view_cal.events)
+        if self.routine_only.get():
+            mode = "weekly routine only (dated entries hidden)"
+        elif dated:
+            mode = "dated calendar"
+        else:
+            mode = "weekly planner (add entries with a date to switch to real weeks)"
         self.status.config(text=f"{n} entr{'ies' if n != 1 else 'y'}  ·  {mode}  ·  click an entry for details")
 
     def _update_nav(self, dated: bool) -> None:
@@ -272,6 +299,8 @@ class App(tk.Tk):
         msg = f"Added: {ev.title} ({when}, {ev.time_label()})" if added else f"Already in the calendar: {ev.title}"
         if warnings:
             msg += f"  ·  note: {warnings[0]}"
+        if ev.dated and self.routine_only.get():
+            msg += "  ·  hidden while 'Weekly routine only' is on"
         self.status.config(text=msg)
 
     # --- events --------------------------------------------------------------
@@ -392,16 +421,19 @@ class App(tk.Tk):
         center_over(win, self)
 
     def export_md(self) -> None:
+        cal = self.view_cal
+        title = "Export weekly routine as Markdown (dated entries left out)" if self.routine_only.get() \
+            else "Export calendar as Markdown"
         path = filedialog.asksaveasfilename(
-            parent=self, title="Export calendar as Markdown", defaultextension=".md",
+            parent=self, title=title, defaultextension=".md",
             initialfile=_safe_name(self.cal.title or "calendar") + ".md",
             filetypes=[("Markdown", "*.md"), ("Text", "*.txt")],
         )
         if not path:
             return
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write(to_markdown(self.cal))
-        self.status.config(text=f"Exported {len(self.cal.events)} events to {path}")
+            fh.write(to_markdown(cal))
+        self.status.config(text=f"Exported {len(cal.events)} entries to {path}")
 
     def export_image(self) -> None:
         ExportImageDialog(self)
@@ -475,7 +507,7 @@ class ExportImageDialog(tk.Toplevel):
         if app.dated:
             ttk.Radiobutton(frm, text=f"Current week ({fmt_date(app.week)} – {fmt_date(app.week + timedelta(days=6))})",
                             value="current", variable=self.scope).grid(row=1, column=0, columnspan=2, sticky="w")
-            n_weeks = len(app.cal.weeks_with_events())
+            n_weeks = len(app.view_cal.weeks_with_events())
             ttk.Radiobutton(frm, text=f"All weeks with dated entries ({n_weeks} images into a folder)", value="all",
                             variable=self.scope).grid(row=2, column=0, columnspan=2, sticky="w")
         else:
@@ -509,12 +541,12 @@ class ExportImageDialog(tk.Toplevel):
             if not path:
                 return
             if app.dated:
-                export_week(app.cal, app.week, path, scale)
+                export_week(app.view_cal, app.week, path, scale, tags=tag_colors(app.cal))
             else:
-                export_week(app.cal, PLANNER_WEEK, path, scale, show_dates=False)
+                export_week(app.view_cal, PLANNER_WEEK, path, scale, show_dates=False, tags=tag_colors(app.cal))
             app.status.config(text=f"Saved {path}")
         else:
-            weeks = app.cal.weeks_with_events()
+            weeks = app.view_cal.weeks_with_events()
             if not weeks:
                 messagebox.showinfo("Export image", "The calendar has no dated entries.", parent=self)
                 return
@@ -524,7 +556,8 @@ class ExportImageDialog(tk.Toplevel):
             self.config(cursor="watch")
             self.update()
             for wk in weeks:
-                export_week(app.cal, wk, os.path.join(folder, f"{base}_{_week_label(wk)}{ext}"), scale)
+                export_week(app.view_cal, wk, os.path.join(folder, f"{base}_{_week_label(wk)}{ext}"), scale,
+                            tags=tag_colors(app.cal))
             self.config(cursor="")
             app.status.config(text=f"Saved {len(weeks)} images to {folder}")
         self.destroy()

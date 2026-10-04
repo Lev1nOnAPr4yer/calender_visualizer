@@ -184,6 +184,7 @@ def render_week(
     height: int | None = None,
     highlight_today: bool = True,
     show_dates: bool = True,
+    tags: dict[str, str] | None = None,
 ) -> RenderResult:
     """Render the week starting at `week_start` (a Monday).
 
@@ -195,7 +196,7 @@ def render_week(
     week_end = week_start + timedelta(days=6)
     segs = cal.segments(week_start, week_end)
     first_hour, last_hour = hour_range(segs)
-    tags = tag_colors(cal)
+    tags = tags if tags is not None else tag_colors(cal)
     days = [week_start + timedelta(days=i) for i in range(7)]
     now_day = today()
 
@@ -381,6 +382,9 @@ def header_texts(week_start: date, show_dates: bool) -> tuple[str, list[tuple[st
     return subtitle, [(WEEKDAYS[d.weekday()][:3].upper(), f"{d.day:02d}.{d.month:02d}.") for d in days]
 
 
-def export_week(cal: Calendar, week_start: date, path: str, scale: float = 3.0, show_dates: bool = True) -> None:
-    result = render_week(cal, week_start, scale=scale, highlight_today=False, show_dates=show_dates)
+def export_week(
+    cal: Calendar, week_start: date, path: str, scale: float = 3.0, show_dates: bool = True,
+    tags: dict[str, str] | None = None,
+) -> None:
+    result = render_week(cal, week_start, scale=scale, highlight_today=False, show_dates=show_dates, tags=tags)
     result.image.save(path, dpi=(72 * scale, 72 * scale))

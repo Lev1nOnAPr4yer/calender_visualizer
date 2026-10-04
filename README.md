@@ -88,8 +88,9 @@ The full specification is in [`AI_SYNTAX_GUIDE.md`](AI_SYNTAX_GUIDE.md). Example
 | Previous / next week | ◀ ▶ buttons, ← → keys or mouse wheel (once there are dated entries) |
 | Add one entry | type it in the box in the toolbar (e.g. `Mo, 8-9, Schoolwork, tag: Uni`) and press Enter; Ctrl+N jumps to the box |
 | Event details / delete | click an event |
+| Show / export only the weekly routine | tick **Weekly routine only** (or Ctrl+R): dated entries are hidden from the view, Export Image and Export .md, but not deleted. Untick to bring them back |
 | Jump to a date | *Go to date…* (DD.MM.YYYY) |
-| Shortcuts | Ctrl+N new entry, Ctrl+O import, Ctrl+A add file, Ctrl+S export .md, Ctrl+E export image |
+| Shortcuts | Ctrl+N new entry, Ctrl+R weekly routine only, Ctrl+O import, Ctrl+A add file, Ctrl+S export .md, Ctrl+E export image |
 
 ## Publishing a new version
 
