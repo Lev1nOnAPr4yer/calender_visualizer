@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from PIL import ImageTk
 
 from . import __version__, storage
+from .ics import to_ics
 from .model import PLANNER_WEEK, WEEKDAYS, Calendar, Event, fmt_date, today, week_start
 from .parser import ParseResult, parse_date, parse_entry, parse_file
 from .render import RenderResult, export_week, render_week, tag_colors
@@ -73,6 +74,7 @@ class App(tk.Tk):
             ("<Control-a>", self.add_file),
             ("<Control-s>", self.export_md),
             ("<Control-e>", self.export_image),
+            ("<Control-i>", self.export_ics),
         ]:
             self.bind(key, lambda e, a=action: None if e.widget is self.quick else a())
         self.bind("<Control-n>", lambda e: self.focus_quick_add())
@@ -89,6 +91,7 @@ class App(tk.Tk):
         m_file.add_separator()
         m_file.add_command(label="Export as .md…", accelerator="Ctrl+S", command=self.export_md)
         m_file.add_command(label="Export as image…", accelerator="Ctrl+E", command=self.export_image)
+        m_file.add_command(label="Export as .ics (Thunderbird, Outlook…)…", accelerator="Ctrl+I", command=self.export_ics)
         m_file.add_separator()
         m_file.add_command(label="Rename calendar…", command=self.rename)
         m_file.add_command(label="Clear calendar…", command=self.clear)
@@ -123,10 +126,15 @@ class App(tk.Tk):
         for text, cmd in [
             ("Import…", self.import_file),
             ("Add file…", self.add_file),
-            ("Export .md…", self.export_md),
-            ("Export Image…", self.export_image),
         ]:
             ttk.Button(bar, text=text, command=cmd).pack(side="left", padx=2)
+        export = ttk.Menubutton(bar, text="Export")
+        m_export = tk.Menu(export, tearoff=False)
+        m_export.add_command(label="Image (.png)…", command=self.export_image)
+        m_export.add_command(label="Calendar file (.ics) for Thunderbird, Outlook…", command=self.export_ics)
+        m_export.add_command(label="Text (.md)…", command=self.export_md)
+        export["menu"] = m_export
+        export.pack(side="left", padx=2)
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
         self.nav_buttons = [
             ttk.Button(bar, text="◀", width=3, command=lambda: self.shift_week(-1)),
@@ -435,6 +443,12 @@ class App(tk.Tk):
             fh.write(to_markdown(cal))
         self.status.config(text=f"Exported {len(cal.events)} entries to {path}")
 
+    def export_ics(self) -> None:
+        if not self.cal.events:
+            messagebox.showinfo("Export .ics", "The calendar is empty.", parent=self)
+            return
+        ExportIcsDialog(self)
+
     def export_image(self) -> None:
         ExportImageDialog(self)
 
@@ -560,6 +574,179 @@ class ExportImageDialog(tk.Toplevel):
                             tags=tag_colors(app.cal))
             self.config(cursor="")
             app.status.config(text=f"Saved {len(weeks)} images to {folder}")
+        self.destroy()
+
+
+class ExportIcsDialog(tk.Toplevel):
+    """Pick entries (All / Dated / Weekly + checklist) and write them to one .ics file."""
+
+    def __init__(self, app: App) -> None:
+        super().__init__(app)
+        self.app = app
+        self.title("Export .ics")
+        self.transient(app)
+        self.minsize(520, 460)
+        cal = app.cal
+        # weekly entries first (by weekday), then dated ones chronologically
+        self.items = [(ev, tk.BooleanVar(value=True)) for ev in cal.undated_events() + cal.dated_events()]
+        for _, var in self.items:
+            var.trace_add("write", lambda *a: self._update())
+
+        frm = ttk.Frame(self, padding=14)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="Which entries", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        self.scope = tk.StringVar(value="weekly" if app.routine_only.get() else "all")
+        n_weekly = sum(1 for ev, _ in self.items if not ev.dated)
+        n_dated = len(self.items) - n_weekly
+        radios = ttk.Frame(frm)
+        radios.pack(anchor="w", pady=(2, 8))
+        for value, text in [("all", f"All ({len(self.items)})"), ("dated", f"Dated only ({n_dated})"),
+                            ("weekly", f"Weekly (undated) only ({n_weekly})")]:
+            ttk.Radiobutton(radios, text=text, value=value, variable=self.scope,
+                            command=self._fill).pack(side="left", padx=(0, 12))
+
+        # Scrollable checklist
+        box = ttk.Frame(frm, relief="solid", borderwidth=1)
+        box.pack(fill="both", expand=True)
+        self.list_canvas = tk.Canvas(box, highlightthickness=0, background="white", height=240)
+        scroll = ttk.Scrollbar(box, orient="vertical", command=self.list_canvas.yview)
+        self.list_canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.list_canvas.pack(side="left", fill="both", expand=True)
+        self.inner = tk.Frame(self.list_canvas, background="white")
+        self._inner_id = self.list_canvas.create_window(0, 0, window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>", lambda e: self.list_canvas.configure(scrollregion=self.list_canvas.bbox("all")))
+        self.list_canvas.bind("<Configure>", lambda e: self.list_canvas.itemconfigure(self._inner_id, width=e.width))
+        for w in (self.list_canvas, self.inner):
+            w.bind("<Enter>", lambda e: self._wheel(True))
+            w.bind("<Leave>", lambda e: self._wheel(False))
+
+        row = ttk.Frame(frm)
+        row.pack(fill="x", pady=(6, 10))
+        ttk.Button(row, text="Select all", command=lambda: self._set_all(True)).pack(side="left")
+        ttk.Button(row, text="Deselect all", command=lambda: self._set_all(False)).pack(side="left", padx=6)
+        self.counter = ttk.Label(row)
+        self.counter.pack(side="right")
+
+        # Weekly entries need real dates in a calendar app: they become weekly repeating events.
+        self.weekly_box = ttk.LabelFrame(frm, text="Weekly entries become events repeating every week", padding=8)
+        self.weekly_box.pack(fill="x")
+        monday = week_start(today())
+        self.start_var = tk.StringVar(value=fmt_date(monday))
+        self.until_var = tk.StringVar(value="")
+        ttk.Label(self.weekly_box, text="Start on:").grid(row=0, column=0, sticky="w")
+        self.start_entry = ttk.Entry(self.weekly_box, textvariable=self.start_var, width=12)
+        self.start_entry.grid(row=0, column=1, sticky="w", padx=(4, 16))
+        ttk.Label(self.weekly_box, text="Repeat until:").grid(row=0, column=2, sticky="w")
+        self.until_entry = ttk.Entry(self.weekly_box, textvariable=self.until_var, width=12)
+        self.until_entry.grid(row=0, column=3, sticky="w", padx=4)
+        ttk.Label(self.weekly_box, text="(DD.MM.YYYY, empty = no end)", foreground="#6b7280").grid(row=0, column=4, sticky="w")
+        self.date_error = ttk.Label(self.weekly_box, text="", foreground="#dc2626")
+        self.date_error.grid(row=1, column=0, columnspan=5, sticky="w")
+        for var in (self.start_var, self.until_var):
+            var.trace_add("write", lambda *a: self._update())
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(12, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="right")
+        self.export_btn = ttk.Button(btns, text="Export .ics…", command=self.run)
+        self.export_btn.pack(side="right", padx=6)
+        self.bind("<Escape>", lambda e: self.destroy())
+
+        self._fill()
+        center_over(self, app)
+
+    # -- helpers --
+    def _wheel(self, on: bool) -> None:
+        if on:
+            self.bind_all("<MouseWheel>", lambda e: self.list_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+            self.bind_all("<Button-4>", lambda e: self.list_canvas.yview_scroll(-1, "units"))
+            self.bind_all("<Button-5>", lambda e: self.list_canvas.yview_scroll(1, "units"))
+        else:
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                self.unbind_all(seq)
+
+    def destroy(self) -> None:
+        self._wheel(False)
+        super().destroy()
+
+    def visible(self) -> list[tuple[Event, tk.BooleanVar]]:
+        scope = self.scope.get()
+        return [(ev, var) for ev, var in self.items
+                if scope == "all" or (scope == "dated") == ev.dated]
+
+    @staticmethod
+    def _label(ev: Event) -> str:
+        if ev.dated:
+            day = f"{WEEKDAYS[ev.date.weekday()][:3]} {fmt_date(ev.date)}"
+        else:
+            day = f"Every {ev.day_name}"
+        text = f"{day}   {ev.time_label()}   {ev.title}"
+        if ev.repeat:
+            text += f"   (repeats {ev.repeat.describe()})"
+        if ev.tag:
+            text += f"   [{ev.tag}]"
+        return text
+
+    def _fill(self) -> None:
+        for child in self.inner.winfo_children():
+            child.destroy()
+        for ev, var in self.visible():
+            tk.Checkbutton(self.inner, text=self._label(ev), variable=var, anchor="w", background="white",
+                           activebackground="#eff6ff", highlightthickness=0).pack(fill="x", anchor="w", padx=4)
+        self.list_canvas.yview_moveto(0)
+        self._update()
+
+    def _set_all(self, value: bool) -> None:
+        for _, var in self.visible():
+            var.set(value)
+
+    def _dates(self) -> tuple[date | None, date | None, str]:
+        start_txt, until_txt = self.start_var.get().strip(), self.until_var.get().strip()
+        start = parse_date(start_txt)
+        if start is None:
+            return None, None, "Start date is not a valid date (DD.MM.YYYY)."
+        until = None
+        if until_txt:
+            until = parse_date(until_txt)
+            if until is None:
+                return None, None, "'Repeat until' is not a valid date (DD.MM.YYYY)."
+            if until < start:
+                return None, None, "'Repeat until' is before the start date."
+        return start, until, ""
+
+    def selected(self) -> list[Event]:
+        return [ev for ev, var in self.visible() if var.get()]
+
+    def _update(self) -> None:
+        vis = self.visible()
+        chosen = self.selected()
+        self.counter.config(text=f"{len(chosen)} of {len(vis)} selected")
+        has_weekly = any(not ev.dated for ev in chosen)
+        state = "normal" if has_weekly else "disabled"
+        self.start_entry.config(state=state)
+        self.until_entry.config(state=state)
+        error = self._dates()[2] if has_weekly else ""
+        self.date_error.config(text=error)
+        self.export_btn.config(state="normal" if chosen and not error else "disabled")
+
+    def run(self) -> None:
+        events = self.selected()
+        start, until, error = self._dates()
+        if not events or (error and any(not ev.dated for ev in events)):
+            return
+        app = self.app
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Export .ics", defaultextension=".ics",
+            initialfile=_safe_name(app.cal.title or "calendar") + ".ics",
+            filetypes=[("iCalendar file", "*.ics")],
+        )
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(to_ics(events, app.cal.title, weekly_start=start, weekly_until=until))
+        app.status.config(text=f"Exported {len(events)} entr{'ies' if len(events) != 1 else 'y'} to {path}")
         self.destroy()
 
 

@@ -35,6 +35,10 @@ def selftest() -> int:
     export_week(cal, cal.first_date(), str(out), scale=2)
     assert out.stat().st_size > 10_000
     out.unlink()
+    from .ics import to_ics
+
+    ics = to_ics(cal.events, cal.title)
+    assert ics.startswith("BEGIN:VCALENDAR\r\n") and ics.count("BEGIN:VEVENT") == len(cal.events)
     return 0
 
 

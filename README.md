@@ -34,6 +34,7 @@ Any `.md` or image files you exported stay wherever you saved them.
 - **Add file** reads a file and merges its events into the current calendar. Exact duplicates are skipped.
 - **Add entry**: type a single entry like `Mo, 8-9, Schoolwork, tag: Uni` into the box in the toolbar and press Enter.
 - **Export .md** saves the calendar back to the same readable syntax, so you can re-import it later.
+- **Export .ics** writes a calendar file for Thunderbird, Outlook, Google Calendar and others. Choose *All*, *Dated only* or *Weekly only*, then tick or untick entries in a checklist. Weekly entries become events that repeat every week from a start date you choose (optionally until an end date).
 - **Export Image** saves a high-resolution PNG image of the week view: the weekly planner, the current week, or every week that has dated entries. Scale 2×–6× gives images up to 8400 px wide.
 - **[`AI_SYNTAX_GUIDE.md`](AI_SYNTAX_GUIDE.md)** is a file you hand to your AI agent so it can write calendar files for you. The exe also contains it: Help → *Save AI syntax guide*.
 
@@ -90,7 +91,7 @@ The full specification is in [`AI_SYNTAX_GUIDE.md`](AI_SYNTAX_GUIDE.md). Example
 | Event details / delete | click an event |
 | Show / export only the weekly routine | tick **Weekly routine only** (or Ctrl+R): dated entries are hidden from the view, Export Image and Export .md, but not deleted. Untick to bring them back |
 | Jump to a date | *Go to date…* (DD.MM.YYYY) |
-| Shortcuts | Ctrl+N new entry, Ctrl+R weekly routine only, Ctrl+O import, Ctrl+A add file, Ctrl+S export .md, Ctrl+E export image |
+| Shortcuts | Ctrl+N new entry, Ctrl+R weekly routine only, Ctrl+O import, Ctrl+A add file, Ctrl+S export .md, Ctrl+E export image, Ctrl+I export .ics |
 
 ## Publishing a new version
 
