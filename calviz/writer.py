@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from itertools import groupby
 
 from .model import WEEKDAYS, Calendar, Event, fmt_date
+from .parser import _KEY_ALIASES
+
+# A comma followed by something that reads like "tag:" would start a field; escape it.
+_FIELD_LIKE_COMMA = re.compile(rf",(?=\s*(?:{'|'.join(_KEY_ALIASES)})\s*:)", re.I)
 
 
 def _escape(s: str) -> str:
-    return s.replace("|", "\\|").replace("\n", " ").strip()
+    s = s.replace("|", "\\|").replace("\n", " ").strip()
+    return _FIELD_LIKE_COMMA.sub("\\\\,", s)
 
 
 def format_event(ev: Event, with_date: bool = False) -> str:
@@ -19,13 +25,13 @@ def format_event(ev: Event, with_date: bool = False) -> str:
     parts.append(_escape(ev.title))
     line = "- " + " ".join(parts)
     if ev.location:
-        line += f" | at: {_escape(ev.location)}"
+        line += f", at: {_escape(ev.location)}"
     if ev.tag:
-        line += f" | tag: {_escape(ev.tag)}"
+        line += f", tag: {_escape(ev.tag)}"
     if ev.color:
-        line += f" | color: {_escape(ev.color)}"
+        line += f", color: {_escape(ev.color)}"
     if ev.repeat:
-        line += f" | repeat: {ev.repeat.describe()}"
+        line += f", repeat: {ev.repeat.describe()}"
     for note in ev.notes.splitlines():
         if note.strip():
             line += f"\n  {note.strip()}"

@@ -13,7 +13,7 @@ from PIL import ImageTk
 
 from . import __version__, storage
 from .model import PLANNER_WEEK, WEEKDAYS, Calendar, Event, fmt_date, today, week_start
-from .parser import ParseResult, parse_date, parse_file
+from .parser import ParseResult, parse_date, parse_entry, parse_file
 from .render import RenderResult, export_week, render_week
 from .resources import AI_GUIDE, ICON_PNG
 from .writer import to_markdown
@@ -63,12 +63,17 @@ class App(tk.Tk):
         self.canvas.bind("<MouseWheel>", lambda e: self.shift_week(-1 if e.delta > 0 else 1))
         self.canvas.bind("<Button-4>", lambda e: self.shift_week(-1))
         self.canvas.bind("<Button-5>", lambda e: self.shift_week(1))
-        self.bind("<Left>", lambda e: self.shift_week(-1))
-        self.bind("<Right>", lambda e: self.shift_week(1))
-        self.bind("<Control-o>", lambda e: self.import_file())
-        self.bind("<Control-a>", lambda e: self.add_file())
-        self.bind("<Control-s>", lambda e: self.export_md())
-        self.bind("<Control-e>", lambda e: self.export_image())
+        # Shortcuts are ignored while typing in the quick-add box (arrows move the cursor there).
+        for key, action in [
+            ("<Left>", lambda: self.shift_week(-1)),
+            ("<Right>", lambda: self.shift_week(1)),
+            ("<Control-o>", self.import_file),
+            ("<Control-a>", self.add_file),
+            ("<Control-s>", self.export_md),
+            ("<Control-e>", self.export_image),
+        ]:
+            self.bind(key, lambda e, a=action: None if e.widget is self.quick else a())
+        self.bind("<Control-n>", lambda e: self.focus_quick_add())
 
     # --- layout --------------------------------------------------------------
 
@@ -77,6 +82,7 @@ class App(tk.Tk):
         m_file = tk.Menu(menubar, tearoff=False)
         m_file.add_command(label="Import… (replace calendar)", accelerator="Ctrl+O", command=self.import_file)
         m_file.add_command(label="Add events from file…", accelerator="Ctrl+A", command=self.add_file)
+        m_file.add_command(label="New entry (type in the box)", accelerator="Ctrl+N", command=self.focus_quick_add)
         m_file.add_separator()
         m_file.add_command(label="Export as .md…", accelerator="Ctrl+S", command=self.export_md)
         m_file.add_command(label="Export as image…", accelerator="Ctrl+E", command=self.export_image)
@@ -110,7 +116,7 @@ class App(tk.Tk):
         bar.pack(fill="x")
         for text, cmd in [
             ("Import…", self.import_file),
-            ("Add…", self.add_file),
+            ("Add file…", self.add_file),
             ("Export .md…", self.export_md),
             ("Export Image…", self.export_image),
         ]:
@@ -124,6 +130,20 @@ class App(tk.Tk):
         ]
         for b in self.nav_buttons:
             b.pack(side="left", padx=2)
+
+        # Quick add: one entry typed as "Mo, 8-9, Schoolwork, tag: Uni"
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Button(bar, text="Add entry", command=self.quick_add).pack(side="right", padx=2)
+        self.quick = tk.Entry(bar, relief="solid", borderwidth=1, highlightthickness=1,
+                              highlightbackground="#c4c4c4", highlightcolor="#3b82f6")
+        self.quick.pack(side="left", fill="x", expand=True, padx=2, ipady=3)
+        self.quick.bind("<Return>", lambda e: self.quick_add())
+        self.quick.bind("<KP_Enter>", lambda e: self.quick_add())
+        self.quick.bind("<FocusIn>", lambda e: self._quick_placeholder(False))
+        self.quick.bind("<FocusOut>", lambda e: self._quick_placeholder(True))
+        self.quick.bind("<Key>", lambda e: self._quick_error(False), add="+")
+        self._quick_hint = True
+        self._quick_placeholder(True)
 
     # --- drawing -------------------------------------------------------------
 
@@ -210,6 +230,49 @@ class App(tk.Tk):
             return
         self.week = week_start(d)
         self.redraw()
+
+    # --- quick add -----------------------------------------------------------
+
+    QUICK_HINT = "e.g. Mo, 8-9, Schoolwork, tag: Uni"
+
+    def _quick_placeholder(self, show: bool) -> None:
+        if show and not self.quick.get():
+            self.quick.insert(0, self.QUICK_HINT)
+            self.quick.config(fg="#9ca3af")
+            self._quick_hint = True
+        elif not show and self._quick_hint:
+            self.quick.delete(0, "end")
+            self.quick.config(fg="black")
+            self._quick_hint = False
+
+    def _quick_error(self, on: bool) -> None:
+        color = "#ef4444" if on else "#c4c4c4"
+        self.quick.config(highlightbackground=color, highlightcolor="#ef4444" if on else "#3b82f6")
+
+    def focus_quick_add(self) -> None:
+        self.quick.focus_set()
+
+    def quick_add(self) -> None:
+        text = "" if self._quick_hint else self.quick.get().strip()
+        if not text:
+            self.focus_quick_add()
+            return
+        ev, warnings = parse_entry(text)
+        if ev is None:
+            self._quick_error(True)
+            self.status.config(text=f"Not added: {warnings[0]}")
+            return
+        added, _ = self.cal.add([ev])
+        if ev.dated:
+            self.week = week_start(ev.date)
+        self.changed()
+        self.quick.delete(0, "end")
+        self._quick_error(False)
+        when = f"{WEEKDAYS[ev.date.weekday()]}, {fmt_date(ev.date)}" if ev.dated else f"every {ev.day_name}"
+        msg = f"Added: {ev.title} ({when}, {ev.time_label()})" if added else f"Already in the calendar: {ev.title}"
+        if warnings:
+            msg += f"  ·  note: {warnings[0]}"
+        self.status.config(text=msg)
 
     # --- events --------------------------------------------------------------
 

@@ -34,16 +34,17 @@ _ALL_DAY_RE = re.compile(r"^(?:all[\s-]?day|ganztägig|ganztags)\b[:\s]*", re.I)
 _BULLET_RE = re.compile(r"^\s*(?:[-*+•]|\d+[.)])\s+(?:\[[ xX]\]\s+)?")
 _HEADING_RE = re.compile(r"^\s*(#{1,6})\s*(.*?)\s*#*\s*$")
 _FIELD_SPLIT_RE = re.compile(r"(?<!\\)\|")
+_COMMA_SPLIT_RE = re.compile(r"(?<!\\),")
 _DATE_LINE_RE = re.compile(rf"(?:[A-Za-zÄÖÜäöü]+[,:]?\s+)*(?:{_DATE_RE.pattern})\s*:?")
 
 _WEEKDAY_NAMES = {
-    0: ("monday", "mon", "montag"),
-    1: ("tuesday", "tue", "tues", "dienstag"),
-    2: ("wednesday", "wed", "mittwoch"),
-    3: ("thursday", "thu", "thur", "thurs", "donnerstag"),
-    4: ("friday", "fri", "freitag"),
-    5: ("saturday", "sat", "samstag", "sonnabend"),
-    6: ("sunday", "sun", "sonntag"),
+    0: ("monday", "mon", "montag", "mo"),
+    1: ("tuesday", "tue", "tues", "dienstag", "di"),
+    2: ("wednesday", "wed", "mittwoch", "mi"),
+    3: ("thursday", "thu", "thur", "thurs", "donnerstag", "do"),
+    4: ("friday", "fri", "freitag", "fr"),
+    5: ("saturday", "sat", "samstag", "sonnabend", "sa"),
+    6: ("sunday", "sun", "sonntag", "so"),
 }
 _WEEKDAY_LOOKUP = {name: wd for wd, names in _WEEKDAY_NAMES.items() for name in names}
 _WEEKDAY_PAT = "|".join(sorted(_WEEKDAY_LOOKUP, key=len, reverse=True))
@@ -51,7 +52,7 @@ _WEEKDAY_PAT = "|".join(sorted(_WEEKDAY_LOOKUP, key=len, reverse=True))
 _WEEKDAY_ONLY_RE = re.compile(rf"(?:(?:every|each|jeden|jeder)\s+)?(?P<wd>{_WEEKDAY_PAT})s?\.?\s*:?", re.I)
 # Leading weekday on an event line; only counts when a time or "all day" follows.
 _WEEKDAY_LEAD_RE = re.compile(rf"^(?:(?:every|each|jeden|jeder)\s+)?(?P<wd>{_WEEKDAY_PAT})s?\.?\s*[,:]?\s+(?=\d|all[\s-]?day|ganzt)", re.I)
-_WEEKDAY_WORD_RE = re.compile(rf"\b(?P<wd>{_WEEKDAY_PAT})\b", re.I)
+_WEEKDAY_WORD_RE = re.compile(rf"\b(?P<wd>{'|'.join(n for n in _WEEKDAY_LOOKUP if len(n) >= 3)})\b", re.I)
 
 _KEY_ALIASES = {
     "at": "location", "location": "location", "where": "location", "place": "location", "ort": "location",
@@ -77,7 +78,7 @@ def parse_date(text: str) -> date | None:
 def parse_weekday(text: str) -> int | None:
     """'Monday', 'every Monday', 'Mo...' style text -> 0..6, else None."""
     m = _WEEKDAY_ONLY_RE.fullmatch(text.strip())
-    return _WEEKDAY_LOOKUP[m.group("wd").lower()] if m else None
+    return _WEEKDAY_LOOKUP[m.group("wd").lower().rstrip(".")] if m else None
 
 
 def parse_time(text: str) -> time | None:
@@ -140,78 +141,175 @@ def parse_repeat(text: str) -> Repeat | None:
 
 
 def _unescape(s: str) -> str:
-    return s.replace("\\|", "|").strip()
+    return s.replace("\\|", "|").replace("\\,", ",").strip()
+
+
+def _day_token(text: str) -> tuple[date | None, int | None] | None:
+    """A whole comma part that names a day: a date or a weekday (name or abbreviation)."""
+    t = text.strip()
+    if _DATE_RE.fullmatch(t):
+        return parse_date(t), None
+    wd = parse_weekday(t)
+    return (None, wd) if wd is not None else None
+
+
+def _hour(text: str) -> time | None:
+    """'8', '08', '8:30', '14:00', '9am' -> time. Bare hours are allowed here."""
+    t = text.strip()
+    if re.fullmatch(r"\d{1,2}", t):
+        t += ":00"
+    return parse_time(t)
+
+
+def _time_token(text: str) -> tuple[time | None, time | None] | None:
+    """A whole comma part that is a time: '8', '8-9', '8:30-10', '14:00 (45m)', 'all day'.
+
+    Returns (start, end); (None, None) means all day. None if it is not a time.
+    """
+    t = text.strip()
+    if re.fullmatch(r"(?:all[\s-]?day|ganztägig|ganztags)", t, re.I):
+        return None, None
+    m = re.fullmatch(
+        r"(?P<a>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:(?:-|–|—|to|bis)\s*(?P<b>\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?"
+        r"\s*(?:\((?P<dur>[^)]*)\))?",
+        t,
+        re.I,
+    )
+    if not m:
+        return None
+    start = _hour(m.group("a"))
+    end = _hour(m.group("b")) if m.group("b") else None
+    if start is None or (m.group("b") and end is None):
+        return None
+    if end is None and m.group("dur"):
+        minutes = parse_duration(m.group("dur"))
+        if minutes is None:
+            return None
+        end = _add_minutes(start, minutes)
+    return start, end
+
+
+def _field(part: str) -> tuple[str, str] | None:
+    """'tag: uni' -> ('tag', 'uni') when the key is a known field name."""
+    key, sep, value = part.partition(":")
+    key_norm = _KEY_ALIASES.get(key.strip().lower())
+    if not sep or key_norm is None:
+        return None
+    return key_norm, value
 
 
 # --- line level parsing ---------------------------------------------------------
 
 def _parse_event_line(body: str, current: date | None, current_wd: int | None, warn) -> Event | None:
-    """Parse the text of one event line (bullet already removed)."""
-    rest = body.strip()
+    """Parse the text of one event line (bullet already removed).
 
-    # Optional leading date ("10.10.2026 20:00 Concert") or weekday ("Friday 18:00 Pizza").
+    Accepted shapes (spaces after commas optional):
+        Mo, 8-9, Schoolwork, tag: uni          comma form
+        Friday 18:00 Pizza, at: Luigi's         space form, fields after commas
+        09:00-10:30 Team meeting | tag: work    legacy '|' fields
+    """
+    legacy = _FIELD_SPLIT_RE.split(body.strip())
+    parts = _COMMA_SPLIT_RE.split(legacy[0])
+
     ev_date, ev_wd = current, current_wd
-    m = _DATE_RE.match(rest)
-    m_wd = None if m else _WEEKDAY_LEAD_RE.match(rest)
-    if m_wd:
-        ev_date, ev_wd = None, _WEEKDAY_LOOKUP[m_wd.group("wd").lower()]
-        rest = rest[m_wd.end():]
-    if m:
-        ev_date = parse_date(m.group(0))
-        if ev_date is None:
-            warn(f"invalid date '{m.group(0)}'")
-            return None
-        ev_wd = None
-        rest = rest[m.end():].lstrip(" :,–-\t")
-        rest = rest.lstrip()
-
     start = end = None
-    m_all = _ALL_DAY_RE.match(rest)
-    if m_all:
-        rest = rest[m_all.end():]
-    else:
-        m_range = _RANGE_RE.match(rest)
-        if m_range:
-            start = parse_time(m_range.group("start"))
-            if start is None:
-                warn(f"invalid time '{m_range.group('start')}'")
+    day_given = time_given = False
+
+    # Comma form: "<day>, <time>, <title>, ..." - each of day and time is optional.
+    if len(parts) > 1:
+        day = _day_token(parts[0])
+        if day is not None:
+            if day == (None, None):
+                warn(f"invalid date '{parts[0].strip()}'")
                 return None
-            if m_range.group("end"):
-                end = parse_time(m_range.group("end"))
-                if end is None:
-                    warn(f"invalid time '{m_range.group('end')}'")
+            ev_date, ev_wd = day
+            day_given = True
+            parts = parts[1:]
+    if len(parts) > 1:
+        tm = _time_token(parts[0])
+        if tm is not None:
+            start, end = tm
+            time_given = True
+            parts = parts[1:]
+
+    rest = parts[0].strip()
+
+    # Space form: optional leading date ("10.10.2026 20:00 Concert") or weekday ("Friday 18:00 Pizza").
+    if not day_given:
+        m = _DATE_RE.match(rest)
+        m_wd = None if m else _WEEKDAY_LEAD_RE.match(rest)
+        if m_wd:
+            ev_date, ev_wd = None, _WEEKDAY_LOOKUP[m_wd.group("wd").lower().rstrip(".")]
+            rest = rest[m_wd.end():]
+        if m:
+            ev_date = parse_date(m.group(0))
+            if ev_date is None:
+                warn(f"invalid date '{m.group(0)}'")
+                return None
+            ev_wd = None
+            rest = rest[m.end():].lstrip(" :,–-\t")
+            rest = rest.lstrip()
+
+    if not time_given:
+        m_all = _ALL_DAY_RE.match(rest)
+        if m_all:
+            rest = rest[m_all.end():]
+        else:
+            m_range = _RANGE_RE.match(rest)
+            if m_range:
+                start = parse_time(m_range.group("start"))
+                if start is None:
+                    warn(f"invalid time '{m_range.group('start')}'")
                     return None
-            rest = rest[m_range.end():].lstrip(" :\t")
-            m_dur = _DURATION_RE.match(rest)
-            if m_dur:
-                minutes = parse_duration(m_dur.group("dur"))
-                if minutes is not None:
-                    rest = rest[m_dur.end():]
+                if m_range.group("end"):
+                    end = parse_time(m_range.group("end"))
                     if end is None:
-                        end = _add_minutes(start, minutes)
-            if end is None:
-                end = _add_minutes(start, 60)
-            if end == start:
-                warn("start and end time are equal; using 1 hour")
-                end = _add_minutes(start, 60)
+                        warn(f"invalid time '{m_range.group('end')}'")
+                        return None
+                rest = rest[m_range.end():].lstrip(" :\t")
+                m_dur = _DURATION_RE.match(rest)
+                if m_dur:
+                    minutes = parse_duration(m_dur.group("dur"))
+                    if minutes is not None:
+                        rest = rest[m_dur.end():]
+                        if end is None:
+                            end = _add_minutes(start, minutes)
+    if start is not None:
+        if end is None:
+            end = _add_minutes(start, 60)
+        if end == start:
+            warn("start and end time are equal; using 1 hour")
+            end = _add_minutes(start, 60)
 
     if ev_date is None and ev_wd is None:
-        warn("event has no day (put it under a '## Monday' or '## Monday, 05.10.2026' heading)")
+        warn("entry has no day (start it with a day like 'Mo,' or put it under a '## Monday' heading)")
         return None
 
-    parts = _FIELD_SPLIT_RE.split(rest)
-    title = _unescape(parts[0]).rstrip(" :")
+    # Remaining comma parts: known 'key: value' parts are fields; anything else
+    # belongs to the previous item ("Lunch, Anna" / "at: Dr. Weber, Main St. 12").
+    title_bits = [rest]
     fields: dict[str, str] = {}
+    last_key: str | None = None
     for part in parts[1:]:
-        key, sep, value = part.partition(":")
-        key_norm = _KEY_ALIASES.get(key.strip().lower())
-        if not sep or key_norm is None:
+        f = _field(part)
+        if f is not None:
+            last_key = f[0]
+            fields[last_key] = f[1].strip()
+        elif last_key is None:
+            title_bits.append(part.strip())
+        else:
+            fields[last_key] = f"{fields[last_key]}, {part.strip()}"
+    for part in legacy[1:]:
+        f = _field(part)
+        if f is None:
             warn(f"unknown field '{part.strip()}' ignored (use at:, tag:, color:, repeat:, notes:)")
             continue
-        fields[key_norm] = _unescape(value)
+        fields[f[0]] = f[1].strip()
+    fields = {k: _unescape(v) for k, v in fields.items()}
+    title = _unescape(", ".join(b for b in title_bits if b)).rstrip(" :")
 
     if not title:
-        warn("event has no title")
+        warn("entry has no title")
         return None
 
     repeat = None
@@ -239,6 +337,16 @@ def _parse_event_line(body: str, current: date | None, current_wd: int | None, w
         repeat=repeat,
         weekday=ev_wd if ev_date is None else None,
     )
+
+
+def parse_entry(text: str) -> tuple[Event | None, list[str]]:
+    """Parse one stand-alone entry line (as typed in the app's quick-add box)."""
+    warnings: list[str] = []
+    body = _BULLET_RE.sub("", text.strip(), count=1)
+    ev = _parse_event_line(body, None, None, warnings.append) if body else None
+    if ev is None and not warnings:
+        warnings.append("nothing to add")
+    return ev, warnings
 
 
 def _add_minutes(t: time, minutes: int) -> time:
@@ -331,10 +439,7 @@ def parse_text(text: str) -> ParseResult:
 
         body = _BULLET_RE.sub("", line, count=1)
         is_bullet = body != line
-        if not is_bullet and not (
-            _DATE_RE.match(stripped) or _RANGE_RE.match(stripped) or _ALL_DAY_RE.match(stripped)
-            or _WEEKDAY_LEAD_RE.match(stripped)
-        ):
+        if not is_bullet and not _looks_like_entry(stripped):
             warn("not an event line (events start with '- ')")
             continue
 
@@ -345,6 +450,14 @@ def parse_text(text: str) -> ParseResult:
 
     flush_notes()
     return result
+
+
+def _looks_like_entry(line: str) -> bool:
+    """Lines without a '- ' bullet count as entries when they start with a day or time."""
+    if _DATE_RE.match(line) or _RANGE_RE.match(line) or _ALL_DAY_RE.match(line) or _WEEKDAY_LEAD_RE.match(line):
+        return True
+    first = _COMMA_SPLIT_RE.split(line, maxsplit=1)
+    return len(first) == 2 and (_day_token(first[0]) is not None or _time_token(first[0]) is not None)
 
 
 def _check_weekday(text: str, d: date, warn) -> None:
@@ -365,4 +478,4 @@ def parse_file(path: str) -> ParseResult:
     return parse_text(data.decode("utf-8", errors="replace"))
 
 
-__all__ = ["ParseResult", "parse_text", "parse_file", "parse_date", "parse_time", "parse_duration", "parse_repeat", "parse_weekday"]
+__all__ = ["ParseResult", "parse_text", "parse_file", "parse_date", "parse_time", "parse_duration", "parse_repeat", "parse_weekday", "parse_entry"]

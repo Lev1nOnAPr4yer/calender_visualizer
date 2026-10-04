@@ -31,7 +31,8 @@ Any `.md` or image files you exported stay wherever you saved them.
 ## Features
 
 - **Import** reads a `.md`/`.txt` file and replaces the calendar with its events.
-- **Add** reads a file and merges its events into the current calendar. Exact duplicates are skipped.
+- **Add file** reads a file and merges its events into the current calendar. Exact duplicates are skipped.
+- **Add entry**: type a single entry like `Mo, 8-9, Schoolwork, tag: Uni` into the box in the toolbar and press Enter.
 - **Export .md** saves the calendar back to the same readable syntax, so you can re-import it later.
 - **Export Image** saves a high-resolution PNG image of the week view: the weekly planner, the current week, or every week that has dated entries. Scale 2×–6× gives images up to 8400 px wide.
 - **[`AI_SYNTAX_GUIDE.md`](AI_SYNTAX_GUIDE.md)** is a file you hand to your AI agent so it can write calendar files for you. The exe also contains it: Help → *Save AI syntax guide*.
@@ -40,27 +41,35 @@ The calendar autosaves (to `%APPDATA%\CalendarVisualizer\calendar.md`) and is re
 
 ## The syntax at a glance
 
+One entry per line, with the day written in it:
+
+```
+Mo, 8-9, Schoolwork, tag: Uni
+Fr, 18:00-20:00, Pizza night, at: Luigi's, tag: friends
+06.10.2026, 14:00 (45m), Dentist
+```
+
+Or many entries under a day heading:
+
 ```markdown
 # Calendar: My Week
 
 ## Monday
-- 07:00-08:00 Gym | tag: sport
-- 09:00-17:00 Work | at: Office | tag: work
-
-## Friday
-- 22:00-01:00 Night out | tag: friends
+- 07:00-08:00 Gym, tag: sport
+- 09:00-17:00 Work, at: Office, tag: work
 
 ## Tuesday, 06.10.2026
-- all day Mom's birthday | color: pink
+- all day Mom's birthday, color: pink
 - 14:00 (45m) Dentist
   Bring the insurance card.
 ```
 
-- `## Monday` … `## Sunday` hold **weekly entries**. They have no date and appear in every week.
-- `## Tuesday, 06.10.2026` holds **dated entries**. Dates are DD.MM.YYYY.
-- Each `- ` line is one entry. Times use the 24-hour clock: `09:00-10:30`, `14:00` (lasts 1 hour),
-  `14:00 (45m)` or `all day`. `22:00-01:00` runs past midnight.
-- Optional fields go after ` | `: `at:`, `tag:` (same tag means same colour), `color:`, `repeat:` (dated entries only), `notes:`.
+- **Weekdays** (weekly entries, shown in every week) can be English or German, full or short:
+  `Monday`/`Mon`/`Montag`/`Mo`, `Tue`/`Di`, `Wed`/`Mi`, `Thu`/`Do`, `Fri`/`Fr`, `Sat`/`Sa`, `Sun`/`So`.
+- **Dates** (dated entries) are DD.MM.YYYY.
+- **Times** use the 24-hour clock: `09:00-10:30`, `8-9`, `14:00` (lasts 1 hour), `14:00 (45m)` or `all day`.
+  `22:00-01:00` runs past midnight.
+- **Optional fields** come after commas: `at:`, `tag:` (same tag means same colour), `color:`, `repeat:` (dated entries only), `notes:`.
 - Lines indented under an entry become its notes.
 - If the program can't understand a line, it skips it and lists it in an import report. It never stops the import.
 
@@ -77,9 +86,10 @@ The full specification is in [`AI_SYNTAX_GUIDE.md`](AI_SYNTAX_GUIDE.md). Example
 | Action | How |
 |---|---|
 | Previous / next week | ◀ ▶ buttons, ← → keys or mouse wheel (once there are dated entries) |
+| Add one entry | type it in the box in the toolbar (e.g. `Mo, 8-9, Schoolwork, tag: Uni`) and press Enter; Ctrl+N jumps to the box |
 | Event details / delete | click an event |
 | Jump to a date | *Go to date…* (DD.MM.YYYY) |
-| Shortcuts | Ctrl+O import, Ctrl+A add, Ctrl+S export .md, Ctrl+E export image |
+| Shortcuts | Ctrl+N new entry, Ctrl+O import, Ctrl+A add file, Ctrl+S export .md, Ctrl+E export image |
 
 ## Publishing a new version
 

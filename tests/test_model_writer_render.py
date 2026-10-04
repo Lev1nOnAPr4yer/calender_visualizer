@@ -136,3 +136,14 @@ def test_mixed_round_trip_uses_dd_mm_yyyy():
     assert md.index("## Monday\n") < md.index("07.10.2026")
     again = parse_text(md)
     assert not again.warnings and set(again.events) == set(cal.events)
+
+
+def test_writer_uses_commas_and_escapes_field_like_text():
+    cal = Calendar("T", parse_text(
+        "## Mo\n- 12:00 Lunch, Anna, at: Dr. W, Main St. 1, tag: x\n"
+        "- 13:00 Odd \\, tag: y title\n"
+    ).events)
+    md = to_markdown(cal)
+    assert "|" not in md and ", tag: x" in md and ", at: Dr. W, Main St. 1" in md
+    again = parse_text(md)
+    assert not again.warnings and set(again.events) == set(cal.events)

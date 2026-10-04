@@ -134,3 +134,61 @@ def test_wrong_weekday_for_date_warns():
 def test_repeat_on_undated_entry_is_ignored():
     r = parse_text("## Monday\n- 10:00 X | repeat: weekly")
     assert r.events[0].repeat is None and "repeat ignored" in r.warnings[0]
+
+
+# --- comma form and day abbreviations ------------------------------------------
+
+def test_comma_quick_form_without_bullet():
+    ev = one("Mo,8-9,Schoolwork,tag:Uni")
+    assert (ev.weekday, ev.start, ev.end, ev.title, ev.tag) == (0, time(8), time(9), "Schoolwork", "Uni")
+
+
+def test_all_day_abbreviations_english_and_german():
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+    for i, name in enumerate(names):
+        assert one(f"{name}, 10:00, X").weekday == i % 7, name
+        assert one(f"## {name}\n- 10:00 X").weekday == i % 7, name
+        assert one(f"{name}:\n- 10:00 X").weekday == i % 7, name
+    assert one("Montag, 10:00, X").weekday == 0
+    assert one("## Mo.\n- 10:00 X").weekday == 0
+
+
+def test_two_letter_words_stay_titles():
+    assert one("## Thursday\n- Do laundry").title == "Do laundry"
+    assert one("## Thursday\n- So much to do").title == "So much to do"
+    assert not parse_text("## Do something, 05.10.2026\n- 10:00 X").warnings  # no weekday mismatch warning
+
+
+def test_comma_times():
+    assert (lambda e: (e.start, e.end))(one("Mo, 8, X")) == (time(8), time(9))
+    assert (lambda e: (e.start, e.end))(one("Mo, 8:30-10, X")) == (time(8, 30), time(10))
+    assert (lambda e: (e.start, e.end))(one("So, 10 (45m), Run")) == (time(10), time(10, 45))
+    assert one("Sa, all day, Market").all_day
+    assert one("Sa, Market").all_day
+
+
+def test_dated_comma_form():
+    ev = one("05.10.2026, 14:00, Dentist, at: Dr. Weber, Main St. 12")
+    assert ev.date == date(2026, 10, 5) and ev.location == "Dr. Weber, Main St. 12"
+
+
+def test_commas_inside_title_and_unknown_keys_stay_text():
+    ev = one("## Monday\n- 12:00 Lunch, Anna & Tom, Design: Thinking, tag: x")
+    assert ev.title == "Lunch, Anna & Tom, Design: Thinking" and ev.tag == "x"
+
+
+def test_legacy_pipe_fields_still_work():
+    ev = one("## Monday\n- 10:00 Old | tag: legacy | at: A")
+    assert (ev.tag, ev.location) == ("legacy", "A")
+
+
+def test_bare_hours_only_in_comma_form():
+    assert one("## Wednesday\n- 7-8 people meeting").all_day
+
+
+def test_parse_entry_requires_day():
+    from calviz.parser import parse_entry
+    ev, warns = parse_entry("Mo,8-9,Schoolwork,tag:Uni")
+    assert ev and not warns
+    ev, warns = parse_entry("8-9, Schoolwork")
+    assert ev is None and "no day" in warns[0]
