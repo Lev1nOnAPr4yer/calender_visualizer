@@ -98,7 +98,8 @@ shrinks by itself, and it's remembered between starts.
 |---|---|
 | Previous / next week | ◀ ▶ buttons, ← → keys or Shift + mouse wheel (once there are dated entries) |
 | Choose the visible hours | drag the two handles of the **Hours** bar on the right (start / end), or drag the blue band to move the range. Double-click the bar to fit all entries |
-| Zoom | mouse wheel over the calendar zooms in/out around the pointer: from 2 hours up to 01:00 → 01:00. On the way it stops once at "earliest entry → latest entry" |
+| Scroll the hours | mouse wheel over the calendar moves the visible hours up / down |
+| Zoom | **Ctrl + mouse wheel** zooms in/out around the pointer: from 2 hours up to 01:00 → 01:00. On the way it stops once at "earliest entry → latest entry" |
 | Add one entry | type it in the box in the toolbar (e.g. `Mo, 8-9, Schoolwork, tag: Uni`) and press Enter; Ctrl+N jumps to the box |
 | Event details / delete | click an event |
 | Show / export only the weekly routine | tick **Weekly routine only** (or Ctrl+R): dated entries are hidden from the view, Export Image and Export .md, but not deleted. Untick to bring them back |

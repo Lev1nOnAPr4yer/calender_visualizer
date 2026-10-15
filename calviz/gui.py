@@ -57,6 +57,13 @@ class App(tk.Tk):
         self.view = storage.load_view() or vr.default_view(self.cal.events)
         self._save_view_job: str | None = None
         self._bar_drag: tuple[str, float] | None = None
+        # Wheel input is collected and applied once per idle cycle (smooth, no backlog).
+        self._wheel = {"zoom": 0.0, "pan": 0.0, "week": 0.0, "y": 0.0}
+        self._wheel_job: str | None = None
+        # While zooming/scrolling/dragging, the notes row keeps its height so the grid doesn't jump.
+        self._interacting = False
+        self._hold_rows = 0
+        self._interact_job: str | None = None
 
         self._build_menu()
         self._build_toolbar()
@@ -70,20 +77,21 @@ class App(tk.Tk):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.bar.bind("<Button-1>", self.on_bar_press)
         self.bar.bind("<B1-Motion>", self.on_bar_drag)
-        self.bar.bind("<ButtonRelease-1>", lambda e: (setattr(self, "_bar_drag", None), self._save_view_soon()))
+        self.bar.bind("<ButtonRelease-1>", self.on_bar_release)
         self.bar.bind("<Double-Button-1>", lambda e: self.fit_to_entries())
-        self.bar.bind("<MouseWheel>", lambda e: self.pan_view(-60 if e.delta > 0 else 60))
-        self.bar.bind("<Button-4>", lambda e: self.pan_view(-60))
-        self.bar.bind("<Button-5>", lambda e: self.pan_view(60))
+        self.bar.bind("<MouseWheel>", lambda e: self.on_wheel(e, e.delta / 120, force_pan=True))
+        self.bar.bind("<Button-4>", lambda e: self.on_wheel(e, 1, force_pan=True))
+        self.bar.bind("<Button-5>", lambda e: self.on_wheel(e, -1, force_pan=True))
 
         # Redraw continuously while the window is being resized (not only when the drag ends).
         self.canvas.bind("<Configure>", lambda e: self.schedule_redraw())
         self.canvas.bind("<Button-1>", self.on_click)
         self.canvas.bind("<Motion>", self.on_motion)
-        # Mouse wheel zooms the hours around the pointer; Shift + wheel changes the week.
-        self.canvas.bind("<MouseWheel>", lambda e: self.on_wheel(e, e.delta > 0))
-        self.canvas.bind("<Button-4>", lambda e: self.on_wheel(e, True))
-        self.canvas.bind("<Button-5>", lambda e: self.on_wheel(e, False))
+        # Wheel scrolls the hours, Ctrl + wheel zooms around the pointer, Shift + wheel changes the week.
+        # Windows reports delta in steps of 120 per notch (smaller for touchpads / smooth mice).
+        self.canvas.bind("<MouseWheel>", lambda e: self.on_wheel(e, e.delta / 120))
+        self.canvas.bind("<Button-4>", lambda e: self.on_wheel(e, 1))
+        self.canvas.bind("<Button-5>", lambda e: self.on_wheel(e, -1))
         # Shortcuts are ignored while typing in the quick-add box (arrows move the cursor there).
         for key, action in [
             ("<Left>", lambda: self.shift_week(-1)),
@@ -218,7 +226,10 @@ class App(tk.Tk):
         self._render = render_week(
             self.view_cal, self.week if dated else PLANNER_WEEK, scale=s,
             width=int(w / s), height=int(h / s), show_dates=dated, tags=tag_colors(self.cal), view=self.view,
+            min_note_rows=self._hold_rows if self._interacting else 0,
         )
+        if self._interacting:
+            self._hold_rows = max(self._hold_rows, self._render.note_rows)
         self._photo = ImageTk.PhotoImage(self._render.image)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self._photo, anchor="nw")
@@ -266,6 +277,7 @@ class App(tk.Tk):
             b.create_text(tx0 - 8, y, text=vr.label(m), anchor="e", fill="#1f2937", font=("TkDefaultFont", 9, "bold"))
 
     def on_bar_press(self, e) -> None:
+        self._begin_interaction()
         y0, y1 = self._bar_y(self.view[0]), self._bar_y(self.view[1])
         if abs(e.y - y0) <= 8:
             self._bar_drag = ("start", 0.0)
@@ -290,15 +302,83 @@ class App(tk.Tk):
             new = vr.pan(self.view, round((m - offset - self.view[0]) / 30) * 30)
         self.set_view(new, save=False)
 
-    def on_wheel(self, e, up: bool) -> None:
-        if e.state & 0x0001:  # Shift: previous / next week
-            self.shift_week(-1 if up else 1)
+    def on_wheel(self, e, notches: float, force_pan: bool = False) -> None:
+        """Collect wheel input; it is applied once per idle cycle in _apply_wheel."""
+        if not notches:
             return
-        anchor = self._render.minutes_at(e.y) if self._render else sum(self.view) / 2
-        fit = vr.fit_view(self.view_cal.events)
-        self.set_view(vr.zoom(self.view, 0.8 if up else 1.25, anchor, fit))
+        w = self._wheel
+        if e.state & 0x0001 and not force_pan:  # Shift: previous / next week
+            w["week"] += notches
+        elif e.state & 0x0004 and not force_pan:  # Ctrl: zoom around the pointer
+            w["zoom"] += notches
+            w["y"] = e.y
+        else:  # plain wheel: move the visible hours up / down
+            w["pan"] += notches
+        if self._wheel_job is None:
+            self._wheel_job = self.after_idle(self._apply_wheel)
 
-    def pan_view(self, delta: int) -> None:
+    def _apply_wheel(self) -> None:
+        self._wheel_job = None
+        w = self._wheel
+        weeks = int(w["week"])  # whole notches only (touchpads send many small ones)
+        w["week"] -= weeks
+        if weeks:
+            self.shift_week(-1 if weeks > 0 else 1)
+        if not (w["zoom"] or w["pan"]):
+            return
+        self._begin_interaction(release_after=700)
+        view = self.view
+        anchor = None
+        if w["zoom"]:
+            anchor = self._render.minutes_at(w["y"]) if self._render else sum(view) / 2
+            new = vr.zoom_notches(view, w["zoom"], anchor, vr.fit_view(self.view_cal.events))
+            if new == vr.fit_view(self.view_cal.events):
+                anchor = None  # the "all entries" stop moves the view on purpose
+            view = new
+        if w["pan"]:
+            view = vr.pan_notches(view, w["pan"])
+        w["zoom"] = w["pan"] = 0.0
+        self.set_view(view)
+        if anchor is not None:
+            self._pin_anchor(anchor, w["y"])
+
+    def _pin_anchor(self, anchor: float, y: float) -> None:
+        """If the grid moved (notes row changed height), shift the view so `anchor` stays under the pointer."""
+        if not self._render:
+            return
+        top, bottom = self._render.grid
+        if bottom <= top:
+            return
+        span = self.view[1] - self.view[0]
+        rel = min(max((y - top) / (bottom - top), 0.0), 1.0)
+        start = anchor - rel * span
+        if abs(start - self.view[0]) > 0.25:
+            self.set_view((start, start + span))
+
+    def _begin_interaction(self, release_after: int | None = None) -> None:
+        self._interacting = True
+        if self._interact_job:
+            self.after_cancel(self._interact_job)
+            self._interact_job = None
+        if release_after:
+            self._interact_job = self.after(release_after, self._end_interaction)
+
+    def _end_interaction(self) -> None:
+        self._interact_job = None
+        self._interacting = False
+        self._hold_rows = 0
+        y = self._wheel["y"]
+        anchor = self._render.minutes_at(y) if self._render else None
+        self.redraw()  # let the notes row settle to its natural height ...
+        if anchor is not None and self._bar_drag is None:
+            self._pin_anchor(anchor, y)  # ... without moving what is under the pointer
+
+    def on_bar_release(self, e) -> None:
+        self._bar_drag = None
+        self._save_view_soon()
+        self._end_interaction()
+
+    def pan_view(self, delta: float) -> None:
         self.set_view(vr.pan(self.view, delta))
 
     def fit_to_entries(self) -> None:
@@ -310,13 +390,13 @@ class App(tk.Tk):
         """Make room for newly added entries (the range never shrinks by itself)."""
         self.set_view(vr.widen(self.view, vr.entries_span(events)))
 
-    def set_view(self, view: tuple[int, int], save: bool = True) -> None:
+    def set_view(self, view: tuple[float, float], save: bool = True) -> None:
         view = vr.clamp(view)
         if view != self.view:
             self.view = view
             self.redraw()
-            self.status.config(text=f"Showing {vr.label(view[0])}–{vr.label(view[1])}  ·  mouse wheel zooms, "
-                                    "Shift + wheel changes the week, double-click the bar to fit all entries")
+            self.status.config(text=f"Showing {vr.label(view[0])}–{vr.label(view[1])}  ·  wheel moves, Ctrl + wheel "
+                                    "zooms, Shift + wheel changes the week, double-click the bar to fit all entries")
             if save:
                 self._save_view_soon()
 

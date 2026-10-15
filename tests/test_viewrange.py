@@ -119,3 +119,44 @@ def test_pan_and_handles():
     assert set_start((480, 1320), 1300) == (1200, 1320)  # keeps 2 h
     assert set_end((480, 1320), 2000) == (480, 1500)
     assert label(1440) == "00:00" and label(1500) == "01:00" and label(510) == "08:30"
+
+
+# --- smooth zoom / scroll (continuous, no rounding jitter) ---------------------------
+
+def test_zoom_keeps_anchor_exactly_in_and_out():
+    from calviz.viewrange import zoom_notches
+    v, anchor = (480.0, 1320.0), 700.0
+    rel0 = (anchor - v[0]) / (v[1] - v[0])
+    for n in [1] * 10 + [-1] * 10 + [0.25] * 8:
+        v = zoom_notches(v, n, anchor)
+        assert abs((anchor - v[0]) / (v[1] - v[0]) - rel0) < 0.005
+
+
+def test_fractional_notches_are_small_steps():
+    from calviz.viewrange import pan_notches, zoom_notches
+    v = (480.0, 1320.0)
+    z = zoom_notches(v, 0.25, 900)
+    assert 0.96 < (z[1] - z[0]) / 840 < 0.975
+    p = pan_notches(v, -0.25)  # scrolling down a little -> later hours
+    assert abs(p[0] - (480 + 0.025 * 840)) < 1e-6
+    for _ in range(100):
+        p = pan_notches(p, -1)
+    assert p == (1500 - 840, 1500)
+
+
+def test_fit_stop_still_hit_once_with_small_steps():
+    from calviz.viewrange import zoom_notches
+    fit = fit_view(cal("## Mo\n- 09:00-17:00 Work").events)
+    v, seen = (480.0, 1320.0), []
+    for _ in range(40):
+        v = zoom_notches(v, 0.25, 780, fit)
+        seen.append(v)
+    assert seen.count(fit) == 1
+
+
+def test_min_note_rows_keeps_grid_top_still():
+    c = cal("## 05.10.2026\n- 07:00-08:00 Early\n- 12:00-13:00 Lunch")
+    with_note = render_week(c, MON, view=(600, 1000), highlight_today=False, height=800)
+    without = render_week(c, MON, view=(400, 1000), highlight_today=False, height=800, min_note_rows=1)
+    assert with_note.note_rows == 1 and without.note_rows == 1
+    assert with_note.grid[0] == without.grid[0]

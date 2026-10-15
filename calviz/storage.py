@@ -52,7 +52,7 @@ def load_view() -> tuple[int, int] | None:
 
     try:
         data = json.loads(view_path().read_text(encoding="utf-8"))
-        start, end = int(data["start"]), int(data["end"])
+        start, end = float(data["start"]), float(data["end"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
     from .viewrange import clamp
@@ -65,4 +65,4 @@ def save_view(view: tuple[int, int]) -> None:
 
     path = view_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"start": view[0], "end": view[1]}), encoding="utf-8")
+    path.write_text(json.dumps({"start": round(view[0]), "end": round(view[1])}), encoding="utf-8")

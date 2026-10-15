@@ -55,7 +55,8 @@ class RenderResult:
     image: Image.Image
     hitboxes: list[HitBox] = field(default_factory=list)
     grid: tuple[float, float] = (0.0, 0.0)  # y of the hour grid's top and bottom, in pixels
-    view: tuple[int, int] = (0, 0)  # visible range in display minutes
+    view: tuple[float, float] = (0, 0)  # visible range in display minutes
+    note_rows: int = 0  # rows used by the notes row (the GUI can hold this while zooming)
 
     def minutes_at(self, y: float) -> float:
         """Display minutes under pixel row `y` (clamped to the grid)."""
@@ -224,7 +225,8 @@ def render_week(
     highlight_today: bool = True,
     show_dates: bool = True,
     tags: dict[str, str] | None = None,
-    view: tuple[int, int] | None = None,
+    view: tuple[float, float] | None = None,
+    min_note_rows: int = 0,
 ) -> RenderResult:
     """Render the week starting at `week_start` (a Monday).
 
@@ -279,7 +281,8 @@ def render_week(
             else:
                 text = f"{ev.time_label()} {ev.title}"
             notes[i].append(Note(ev, i, text, seg.occurrence))
-    note_rows = max((len(n) for n in notes), default=0)
+    # min_note_rows lets the GUI keep this row's height steady while zooming, so the grid doesn't jump.
+    note_rows = max(max((len(n) for n in notes), default=0), min_note_rows)
     note_h = 19
     notes_h = (note_rows * (note_h + 2) + 6) if note_rows else 0
 
@@ -444,7 +447,7 @@ def render_week(
             r = 4 * u
             d.ellipse([x0 + i * col_w - r, y - r, x0 + i * col_w + r, y + r], fill=NOW_LINE)
 
-    return RenderResult(img, hit, grid=(grid_top, grid_bottom), view=view)
+    return RenderResult(img, hit, grid=(grid_top, grid_bottom), view=view, note_rows=note_rows)
 
 
 def header_texts(week_start: date, show_dates: bool) -> tuple[str, list[tuple[str, str]]]:
@@ -459,7 +462,7 @@ def header_texts(week_start: date, show_dates: bool) -> tuple[str, list[tuple[st
 
 def export_week(
     cal: Calendar, week_start: date, path: str, scale: float = 3.0, show_dates: bool = True,
-    tags: dict[str, str] | None = None, view: tuple[int, int] | None = None,
+    tags: dict[str, str] | None = None, view: tuple[float, float] | None = None,
 ) -> None:
     result = render_week(cal, week_start, scale=scale, highlight_today=False, show_dates=show_dates, tags=tags,
                          view=view)

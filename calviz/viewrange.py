@@ -16,9 +16,11 @@ DAY_START = 60  # 01:00
 DAY_END = 1500  # 01:00 of the next day
 MIN_SPAN = 120  # closest zoom: 2 hours
 DEFAULT_VIEW = (8 * 60, 22 * 60)
-STEP = 15  # every range value is a multiple of 15 minutes
+STEP = 15  # auto-widening rounds to quarter hours
+ZOOM_PER_NOTCH = 1.15  # one wheel notch zooms by 15 %
+PAN_PER_NOTCH = 0.10  # one wheel notch scrolls by 10 % of the visible span
 
-View = tuple[int, int]
+View = tuple[float, float]  # continuous while scrolling/zooming; rounded only where it helps
 
 
 def _floor(m: float) -> int:
@@ -31,7 +33,7 @@ def _ceil(m: float) -> int:
 
 def clamp(view: View) -> View:
     """Keep a view inside 01:00..01:00 and at least 2 hours long."""
-    start, end = sorted((int(view[0]), int(view[1])))
+    start, end = sorted((float(view[0]), float(view[1])))
     span = min(max(end - start, MIN_SPAN), DAY_END - DAY_START)
     start = min(max(start, DAY_START), DAY_END - span)
     return start, start + span
@@ -94,32 +96,37 @@ def zoom(view: View, factor: float, anchor: float, fit: View | None = None) -> V
         fit_span = fit[1] - fit[0]
         if (span < fit_span <= new_span) or (new_span <= fit_span < span):
             return fit
-    new_span = _ceil(new_span) if factor > 1 else _floor(new_span)
-    if new_span == span and factor != 1:  # make sure every notch changes something
-        new_span += STEP if factor > 1 else -STEP
-    new_span = min(max(new_span, MIN_SPAN), DAY_END - DAY_START)
     rel = (anchor - start) / span if span else 0.5
     rel = min(max(rel, 0.0), 1.0)
-    new_start = int(round((anchor - rel * new_span) / STEP) * STEP)
+    new_start = anchor - rel * new_span  # exact: the time under the pointer stays put
     return clamp((new_start, new_start + new_span))
+
+
+def zoom_notches(view: View, notches: float, anchor: float, fit: View | None = None) -> View:
+    """Zoom by wheel notches (1 notch = 120 wheel delta); positive notches zoom in."""
+    return zoom(view, ZOOM_PER_NOTCH ** (-notches), anchor, fit)
+
+
+def pan_notches(view: View, notches: float) -> View:
+    """Scroll by wheel notches; positive notches move to earlier hours."""
+    return pan(view, -notches * PAN_PER_NOTCH * (view[1] - view[0]))
 
 
 def pan(view: View, delta: float) -> View:
     """Move the whole range by `delta` minutes, keeping its length."""
     span = view[1] - view[0]
-    start = _floor(view[0] + delta) if delta >= 0 else _ceil(view[0] + delta)
-    start = min(max(start, DAY_START), DAY_END - span)
+    start = min(max(view[0] + delta, DAY_START), DAY_END - span)
     return start, start + span
 
 
 def set_start(view: View, start: float) -> View:
     start = min(max(round(start / 30) * 30, DAY_START), view[1] - MIN_SPAN)
-    return int(start), view[1]
+    return float(start), view[1]
 
 
 def set_end(view: View, end: float) -> View:
     end = max(min(round(end / 30) * 30, DAY_END), view[0] + MIN_SPAN)
-    return view[0], int(end)
+    return view[0], float(end)
 
 
 def label(minutes: float) -> str:
