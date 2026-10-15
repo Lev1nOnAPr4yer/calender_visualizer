@@ -82,11 +82,23 @@ The full specification is in [`AI_SYNTAX_GUIDE.md`](AI_SYNTAX_GUIDE.md). Example
 [`examples/sample.md`](examples/sample.md) (weekly planner) and
 [`examples/sample-dated.md`](examples/sample-dated.md) (dated).
 
+## Days run from 01:00 to 01:00
+
+Each day column covers 01:00 of that day until 01:00 of the next morning. An entry like `22:00-01:00` is one block,
+and something at 00:30 is shown at the end of the previous day. Entries outside the visible hours (for example the
+part of a party that goes on until 03:00, or an entry before the start of the range) are listed as small notes at the
+top of their day, e.g. "↳ Concert until 03:00", so they never cover other entries.
+
+The visible range starts at 08:00–22:00 and widens automatically when you add entries outside it. It never
+shrinks by itself, and it's remembered between starts.
+
 ## Using the program
 
 | Action | How |
 |---|---|
-| Previous / next week | ◀ ▶ buttons, ← → keys or mouse wheel (once there are dated entries) |
+| Previous / next week | ◀ ▶ buttons, ← → keys or Shift + mouse wheel (once there are dated entries) |
+| Choose the visible hours | drag the two handles of the **Hours** bar on the right (start / end), or drag the blue band to move the range. Double-click the bar to fit all entries |
+| Zoom | mouse wheel over the calendar zooms in/out around the pointer: from 2 hours up to 01:00 → 01:00. On the way it stops once at "earliest entry → latest entry" |
 | Add one entry | type it in the box in the toolbar (e.g. `Mo, 8-9, Schoolwork, tag: Uni`) and press Enter; Ctrl+N jumps to the box |
 | Event details / delete | click an event |
 | Show / export only the weekly routine | tick **Weekly routine only** (or Ctrl+R): dated entries are hidden from the view, Export Image and Export .md, but not deleted. Untick to bring them back |

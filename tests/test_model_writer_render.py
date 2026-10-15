@@ -115,7 +115,7 @@ def test_planner_only_is_not_dated():
     cal = sample_calendar(SAMPLE)
     assert not cal.is_dated() and cal.first_date() is None and cal.weeks_with_events() == []
     res = render_week(cal, PLANNER_WEEK, show_dates=False, highlight_today=False)
-    assert len(res.hitboxes) == 18  # 17 entries, the Friday night out continues into Saturday
+    assert len(res.hitboxes) == 17  # the Friday night out 22:00-01:00 is one block now
 
 
 def test_header_texts():

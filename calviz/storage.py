@@ -40,3 +40,29 @@ def save(cal: Calendar) -> None:
 def remove_all_data() -> None:
     """Delete everything the program ever stored (the autosave folder)."""
     shutil.rmtree(data_dir(), ignore_errors=True)
+
+
+def view_path() -> Path:
+    return data_dir() / "view.json"
+
+
+def load_view() -> tuple[int, int] | None:
+    """The saved visible time range, or None if there is none (or it is unreadable)."""
+    import json
+
+    try:
+        data = json.loads(view_path().read_text(encoding="utf-8"))
+        start, end = int(data["start"]), int(data["end"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    from .viewrange import clamp
+
+    return clamp((start, end))
+
+
+def save_view(view: tuple[int, int]) -> None:
+    import json
+
+    path = view_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"start": view[0], "end": view[1]}), encoding="utf-8")

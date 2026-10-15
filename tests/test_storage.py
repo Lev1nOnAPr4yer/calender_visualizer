@@ -18,3 +18,14 @@ def test_nothing_written_until_first_save_and_remove_cleans_up(tmp_path, monkeyp
     storage.remove_all_data()
     assert not folder.exists()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_view_round_trip_and_corrupt_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    assert storage.load_view() is None
+    storage.save_view((360, 1500))
+    assert storage.load_view() == (360, 1500)
+    storage.view_path().write_text("not json", encoding="utf-8")
+    assert storage.load_view() is None
+    storage.remove_all_data()
+    assert not (tmp_path / "CalendarVisualizer").exists()

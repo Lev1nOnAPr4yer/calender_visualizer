@@ -15,6 +15,8 @@ from functools import lru_cache
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from .model import WEEKDAYS, Calendar, Event, Segment, fmt_date, today
+from .viewrange import DAY_END, DAY_START, clamp, default_view
+from .viewrange import label as view_label
 from .resources import FONT_BOLD, FONT_REGULAR
 
 PALETTE = [
@@ -52,6 +54,16 @@ class HitBox:
 class RenderResult:
     image: Image.Image
     hitboxes: list[HitBox] = field(default_factory=list)
+    grid: tuple[float, float] = (0.0, 0.0)  # y of the hour grid's top and bottom, in pixels
+    view: tuple[int, int] = (0, 0)  # visible range in display minutes
+
+    def minutes_at(self, y: float) -> float:
+        """Display minutes under pixel row `y` (clamped to the grid)."""
+        top, bottom = self.grid
+        if bottom <= top:
+            return float(self.view[0])
+        rel = min(max((y - top) / (bottom - top), 0.0), 1.0)
+        return self.view[0] + rel * (self.view[1] - self.view[0])
 
     def hit(self, x: float, y: float) -> HitBox | None:
         for hb in reversed(self.hitboxes):
@@ -161,19 +173,46 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_w: float, max_lines: i
     return [_ellipsize(draw, ln, font, max_w) for ln in lines]
 
 
-def _is_continuation(s: Segment) -> bool:
-    """The after-midnight part of an event that started the day before."""
-    return s.occurrence is not None and s.occurrence < s.day
+@dataclass
+class Note:
+    """An entry piece outside the visible hours, listed in the notes row of its column."""
+
+    event: Event
+    column: int
+    text: str
+    occurrence: date
 
 
-def hour_range(segs: list[Segment], default: tuple[int, int] = (8, 18)) -> tuple[int, int]:
-    lo, hi = default
-    for s in segs:
-        if s.all_day or _is_continuation(s):
+def display_pieces(cal: Calendar, week_start: date) -> tuple[list[list[Segment]], set[int]]:
+    """Timed entry pieces per day column; each column covers 01:00 -> 01:00 next day.
+
+    Minutes in the returned segments are display minutes (60..1500). The second
+    value holds id()s of pieces that continue an entry from the previous column.
+    """
+    columns: list[list[Segment]] = [[] for _ in range(7)]
+    continued: set[int] = set()
+    lo = week_start - timedelta(days=1)
+    hi = week_start + timedelta(days=7)  # an entry at 00:30 next Monday belongs to Sunday
+    for ev in cal.events:
+        if ev.all_day:
             continue
-        lo = min(lo, s.start_min // 60)
-        hi = max(hi, math.ceil(s.end_min / 60))
-    return max(0, lo), min(24, hi)
+        s = ev.start.hour * 60 + ev.start.minute
+        e = ev.end.hour * 60 + ev.end.minute
+        duration = e - s if e > s else e + 1440 - s
+        for d in cal.occurrence_dates(ev, lo, hi):
+            if d < lo:
+                continue
+            a = (d - week_start).days * 1440 + s
+            b = a + duration
+            for col in range(max(0, (a - DAY_END) // 1440), min(6, (b - DAY_START) // 1440) + 1):
+                w0, w1 = col * 1440 + DAY_START, col * 1440 + DAY_END
+                pa, pb = max(a, w0), min(b, w1)
+                if pb > pa:
+                    seg = Segment(ev, week_start + timedelta(days=col), pa - col * 1440, pb - col * 1440, occurrence=d)
+                    columns[col].append(seg)
+                    if a < w0:
+                        continued.add(id(seg))
+    return columns, continued
 
 
 def render_week(
@@ -185,17 +224,20 @@ def render_week(
     highlight_today: bool = True,
     show_dates: bool = True,
     tags: dict[str, str] | None = None,
+    view: tuple[int, int] | None = None,
 ) -> RenderResult:
     """Render the week starting at `week_start` (a Monday).
 
     `width`/`height` are in base units; the output image is that size times
     `scale`. If `height` is None it is chosen from the visible hour range.
+    `view` is the visible range in display minutes (see viewrange); entries
+    entirely outside it are listed as notes above the hour grid.
     With `show_dates=False` the week is drawn as an undated weekly planner:
     weekday names only, no dates, week numbers, months or years.
     """
     week_end = week_start + timedelta(days=6)
-    segs = cal.segments(week_start, week_end)
-    first_hour, last_hour = hour_range(segs)
+    view = clamp(view) if view is not None else default_view(cal.events)
+    vs, ve = view
     tags = tags if tags is not None else tag_colors(cal)
     days = [week_start + timedelta(days=i) for i in range(7)]
     now_day = today()
@@ -213,7 +255,7 @@ def render_week(
 
     # All-day rows
     allday: dict[date, list[Segment]] = {d: [] for d in days}
-    for s in segs:
+    for s in cal.segments(week_start, week_end):
         if s.all_day:
             allday[s.day].append(s)
     for lst in allday.values():
@@ -222,12 +264,32 @@ def render_week(
     row_h = 24
     allday_h = (allday_rows * (row_h + 3) + 8) if allday_rows else 0
 
-    hours = last_hour - first_hour
+    # Timed pieces: inside the view they are blocks, entirely outside they become notes.
+    columns, continued = display_pieces(cal, week_start)
+    visible: list[list[Segment]] = [[] for _ in range(7)]
+    notes: list[list[Note]] = [[] for _ in range(7)]
+    for i, pieces in enumerate(columns):
+        for seg in sorted(pieces, key=lambda x: x.start_min):
+            if seg.end_min > vs and seg.start_min < ve:
+                visible[i].append(seg)
+                continue
+            ev = seg.event
+            if id(seg) in continued:
+                text = f"↳ {ev.title} until {ev.end:%H:%M}"
+            else:
+                text = f"{ev.time_label()} {ev.title}"
+            notes[i].append(Note(ev, i, text, seg.occurrence))
+    note_rows = max((len(n) for n in notes), default=0)
+    note_h = 19
+    notes_h = (note_rows * (note_h + 2) + 6) if note_rows else 0
+
+    hours = (ve - vs) / 60
+    header_h = title_h + dayhead_h + allday_h + notes_h
     if height is None:
         hour_h = 58.0
-        height = int(title_h + dayhead_h + allday_h + hours * hour_h + pad * 2)
+        height = int(header_h + hours * hour_h + pad * 2)
     else:
-        hour_h = max(20.0, (height - title_h - dayhead_h - allday_h - pad * 2) / max(hours, 1))
+        hour_h = max(20.0, (height - header_h - pad * 2) / hours)
 
     W, H = round(width * u), round(height * u)
     img = Image.new("RGB", (W, H), BG)
@@ -237,7 +299,7 @@ def render_week(
     x0 = (pad + gutter) * u
     x1 = (width - pad) * u
     col_w = (x1 - x0) / 7
-    grid_top = (title_h + dayhead_h + allday_h) * u
+    grid_top = header_h * u
     grid_bottom = grid_top + hours * hour_h * u
 
     # Title
@@ -275,7 +337,6 @@ def render_week(
 
     # All-day events
     f_ev = _font(round(12 * u), True)
-    f_ev_small = _font(round(11 * u))
     top = (title_h + dayhead_h + 4) * u
     for i, day in enumerate(days):
         for r, s in enumerate(allday[day]):
@@ -289,42 +350,54 @@ def render_week(
             d.text((bx0 + 6 * u, (by0 + by1) / 2), txt, font=f_ev, fill=(255, 255, 255), anchor="lm")
             hit.append(HitBox((bx0, by0, bx1, by1), s.event, s.occurrence))
 
+    # Notes row: entries outside the visible hours (e.g. "↳ Concert until 03:00")
+    f_note = _font(round(11 * u), True)
+    ntop = (title_h + dayhead_h + allday_h + 3) * u
+    for i, col_notes in enumerate(notes):
+        for r, note in enumerate(col_notes):
+            bx0 = x0 + i * col_w + 3 * u
+            bx1 = x0 + (i + 1) * col_w - 3 * u
+            by0 = ntop + r * (note_h + 2) * u
+            by1 = by0 + note_h * u
+            col = event_color(note.event, tags)
+            d.rounded_rectangle([bx0, by0, bx1, by1], radius=4 * u, fill=_tint(col, 0.85), outline=_tint(col, 0.5),
+                                width=max(1, round(u)))
+            d.rounded_rectangle([bx0, by0, bx0 + 4 * u, by1], radius=2 * u, fill=col)
+            txt = _ellipsize(d, note.text, f_note, bx1 - bx0 - 14 * u)
+            d.text((bx0 + 9 * u, (by0 + by1) / 2), txt, font=f_note, fill=_shade(col, 0.55), anchor="lm")
+            hit.append(HitBox((bx0, by0, bx1, by1), note.event, note.occurrence))
+
     # Hour grid
+    def y_of(minutes: float) -> float:
+        return grid_top + (minutes - vs) / 60 * hour_h * u
+
     f_hour = _font(round(11 * u))
-    for h in range(hours + 1):
-        y = grid_top + h * hour_h * u
-        d.line([x0, y, x1, y], fill=GRID, width=max(1, round(u)))
-        if h < hours:
-            yh = y + hour_h * u / 2
-            d.line([x0, yh, x1, yh], fill=GRID_HALF, width=max(1, round(u)))
-        hr = first_hour + h
-        if h < hours or hr == 24:
-            d.text((x0 - 8 * u, y), f"{hr % 24:02d}:00" if hr < 24 else "24:00", font=f_hour, fill=MUTED, anchor="rm")
+    label_halves = hour_h >= 90
+    m = math.ceil(vs / 30) * 30
+    while m <= ve:
+        y = y_of(m)
+        full = m % 60 == 0
+        d.line([x0, y, x1, y], fill=GRID if full else GRID_HALF, width=max(1, round(u)))
+        if full or label_halves:
+            d.text((x0 - 8 * u, y), view_label(m), font=f_hour, fill=MUTED if full else _tint(MUTED, 0.3), anchor="rm")
+        m += 30
     for i in range(8):
         x = x0 + i * col_w
         d.line([x, (title_h + dayhead_h - 6) * u, x, grid_bottom], fill=GRID, width=max(1, round(u)))
     d.line([x0, grid_top, x1, grid_top], fill=(209, 213, 219), width=max(1, round(1.5 * u)))
+    d.line([x0, grid_bottom, x1, grid_bottom], fill=GRID, width=max(1, round(u)))
 
-    # Timed events
-    def y_of(minutes: float) -> float:
-        return grid_top + (minutes / 60 - first_hour) * hour_h * u
-
+    # Timed events (clipped to the view, but labelled with their real times)
     f_time = _font(round(11 * u))
     f_title_ev = _font(round(12.5 * u), True)
     line_h = 15 * u
-    for i, day in enumerate(days):
-        day_segs = [s for s in segs if not s.all_day and s.day == day]
-        for s, c, n in _layout_columns(day_segs):
+    for i in range(7):
+        for s, c, n in _layout_columns(visible[i]):
             sub_w = (col_w - 6 * u) / n
             bx0 = x0 + i * col_w + 3 * u + c * sub_w
             bx1 = bx0 + sub_w - 2 * u
-            # Continuations from the previous night are clipped to the visible hours.
-            vis_start = max(s.start_min, first_hour * 60)
-            vis_end = min(s.end_min, last_hour * 60)
-            if vis_end <= vis_start:
-                vis_start, vis_end = first_hour * 60, first_hour * 60 + 20
-            by0 = y_of(vis_start) + 1 * u
-            by1 = max(y_of(vis_end) - 1 * u, by0 + 14 * u)
+            by0 = y_of(max(s.start_min, vs)) + 1 * u
+            by1 = max(y_of(min(s.end_min, ve)) - 1 * u, by0 + 14 * u)
             col = event_color(s.event, tags)
             d.rounded_rectangle([bx0, by0, bx1, by1], radius=5 * u, fill=_tint(col, 0.82), outline=_tint(col, 0.45), width=max(1, round(u)))
             d.rounded_rectangle([bx0, by0, bx0 + 4 * u, by1], radius=2 * u, fill=col)
@@ -334,18 +407,15 @@ def render_week(
             avail = int((by1 - ty - 2 * u) // line_h)
             dark = _shade(col, 0.55)
             ev = s.event
-            time_txt = ev.time_label()
-            if _is_continuation(s):
-                time_txt = f"until {ev.end:%H:%M} (from previous day)"
+            is_cont = id(s) in continued
             if avail <= 1:
-                one = f"↳ {ev.title} until {ev.end:%H:%M}" if _is_continuation(s) else f"{ev.start:%H:%M} {ev.title}"
+                one = f"↳ {ev.title} until {ev.end:%H:%M}" if is_cont else f"{ev.start:%H:%M} {ev.title}"
                 d.text((tx, ty - 2 * u), _ellipsize(d, one, f_title_ev, tw), font=f_title_ev, fill=dark)
             else:
-                title_lines = _wrap(d, ev.title, f_title_ev, tw, avail - 1)
-                for ln in title_lines:
+                for ln in _wrap(d, ev.title, f_title_ev, tw, avail - 1):
                     d.text((tx, ty), ln, font=f_title_ev, fill=dark)
                     ty += line_h
-                extras = [time_txt]
+                extras = [ev.time_label()]
                 if ev.location:
                     extras.append(ev.location)
                 for extra in extras:
@@ -355,21 +425,26 @@ def render_week(
                     ty += line_h
             hit.append(HitBox((bx0, by0, bx1, by1), ev, s.occurrence))
 
-    # "Now" line
-    today_cols = [i for i, day in enumerate(days) if is_today(day)]
-    if today_cols:
+    # "Now" line (00:00-00:59 is drawn at the end of the previous day's column)
+    if highlight_today:
         from datetime import datetime
 
         now = datetime.now()
         mins = now.hour * 60 + now.minute
-        if first_hour * 60 <= mins <= last_hour * 60:
-            i = today_cols[0]
+        disp_day = now_day
+        if mins < DAY_START:
+            mins += 1440
+            disp_day = now_day - timedelta(days=1)
+        cols = [i for i, day in enumerate(days)
+                if (day == disp_day if show_dates else day.weekday() == disp_day.weekday())]
+        if cols and vs <= mins <= ve:
+            i = cols[0]
             y = y_of(mins)
             d.line([x0 + i * col_w, y, x0 + (i + 1) * col_w, y], fill=NOW_LINE, width=max(2, round(2 * u)))
             r = 4 * u
             d.ellipse([x0 + i * col_w - r, y - r, x0 + i * col_w + r, y + r], fill=NOW_LINE)
 
-    return RenderResult(img, hit)
+    return RenderResult(img, hit, grid=(grid_top, grid_bottom), view=view)
 
 
 def header_texts(week_start: date, show_dates: bool) -> tuple[str, list[tuple[str, str]]]:
@@ -384,7 +459,8 @@ def header_texts(week_start: date, show_dates: bool) -> tuple[str, list[tuple[st
 
 def export_week(
     cal: Calendar, week_start: date, path: str, scale: float = 3.0, show_dates: bool = True,
-    tags: dict[str, str] | None = None,
+    tags: dict[str, str] | None = None, view: tuple[int, int] | None = None,
 ) -> None:
-    result = render_week(cal, week_start, scale=scale, highlight_today=False, show_dates=show_dates, tags=tags)
+    result = render_week(cal, week_start, scale=scale, highlight_today=False, show_dates=show_dates, tags=tags,
+                         view=view)
     result.image.save(path, dpi=(72 * scale, 72 * scale))

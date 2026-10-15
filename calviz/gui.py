@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from PIL import ImageTk
 
 from . import __version__, storage
+from . import viewrange as vr
 from .ics import to_ics
 from .model import PLANNER_WEEK, WEEKDAYS, Calendar, Event, fmt_date, today, week_start
 from .parser import ParseResult, parse_date, parse_entry, parse_file
@@ -51,21 +52,38 @@ class App(tk.Tk):
         self._redraw_job: str | None = None
         # "Weekly routine only": hide dated entries everywhere (view + exports) without deleting them.
         self.routine_only = tk.BooleanVar(value=False)
+        # Visible hours (display minutes, 01:00 -> 01:00 next day). Grows when entries are added, never shrinks
+        # by itself; changed by the range bar and the mouse wheel; remembered in view.json.
+        self.view = storage.load_view() or vr.default_view(self.cal.events)
+        self._save_view_job: str | None = None
+        self._bar_drag: tuple[str, float] | None = None
 
         self._build_menu()
         self._build_toolbar()
-        self.canvas = tk.Canvas(self, background="white", highlightthickness=0, cursor="arrow")
-        self.canvas.pack(fill="both", expand=True)
         self.status = ttk.Label(self, anchor="w", padding=(8, 3))
         self.status.pack(fill="x", side="bottom")
+        area = tk.Frame(self, background="white")
+        area.pack(fill="both", expand=True)
+        self.bar = tk.Canvas(area, width=78, background="white", highlightthickness=0, cursor="sb_v_double_arrow")
+        self.bar.pack(side="right", fill="y")
+        self.canvas = tk.Canvas(area, background="white", highlightthickness=0, cursor="arrow")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.bar.bind("<Button-1>", self.on_bar_press)
+        self.bar.bind("<B1-Motion>", self.on_bar_drag)
+        self.bar.bind("<ButtonRelease-1>", lambda e: (setattr(self, "_bar_drag", None), self._save_view_soon()))
+        self.bar.bind("<Double-Button-1>", lambda e: self.fit_to_entries())
+        self.bar.bind("<MouseWheel>", lambda e: self.pan_view(-60 if e.delta > 0 else 60))
+        self.bar.bind("<Button-4>", lambda e: self.pan_view(-60))
+        self.bar.bind("<Button-5>", lambda e: self.pan_view(60))
 
         # Redraw continuously while the window is being resized (not only when the drag ends).
         self.canvas.bind("<Configure>", lambda e: self.schedule_redraw())
         self.canvas.bind("<Button-1>", self.on_click)
         self.canvas.bind("<Motion>", self.on_motion)
-        self.canvas.bind("<MouseWheel>", lambda e: self.shift_week(-1 if e.delta > 0 else 1))
-        self.canvas.bind("<Button-4>", lambda e: self.shift_week(-1))
-        self.canvas.bind("<Button-5>", lambda e: self.shift_week(1))
+        # Mouse wheel zooms the hours around the pointer; Shift + wheel changes the week.
+        self.canvas.bind("<MouseWheel>", lambda e: self.on_wheel(e, e.delta > 0))
+        self.canvas.bind("<Button-4>", lambda e: self.on_wheel(e, True))
+        self.canvas.bind("<Button-5>", lambda e: self.on_wheel(e, False))
         # Shortcuts are ignored while typing in the quick-add box (arrows move the cursor there).
         for key, action in [
             ("<Left>", lambda: self.shift_week(-1)),
@@ -199,11 +217,12 @@ class App(tk.Tk):
         dated = self.dated
         self._render = render_week(
             self.view_cal, self.week if dated else PLANNER_WEEK, scale=s,
-            width=int(w / s), height=int(h / s), show_dates=dated, tags=tag_colors(self.cal),
+            width=int(w / s), height=int(h / s), show_dates=dated, tags=tag_colors(self.cal), view=self.view,
         )
         self._photo = ImageTk.PhotoImage(self._render.image)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self._photo, anchor="nw")
+        self._draw_bar()
         self._update_nav(dated)
         n = len(self.view_cal.events)
         if self.routine_only.get():
@@ -213,6 +232,105 @@ class App(tk.Tk):
         else:
             mode = "weekly planner (add entries with a date to switch to real weeks)"
         self.status.config(text=f"{n} entr{'ies' if n != 1 else 'y'}  ·  {mode}  ·  click an entry for details")
+
+    # --- visible hours: range bar + wheel zoom -----------------------------------
+
+    def _bar_geometry(self) -> tuple[float, float]:
+        if self._render and self._render.grid[1] > self._render.grid[0]:
+            return self._render.grid
+        return 10.0, max(20.0, self.bar.winfo_height() - 10.0)
+
+    def _bar_y(self, minutes: float) -> float:
+        top, bottom = self._bar_geometry()
+        return top + (minutes - vr.DAY_START) / (vr.DAY_END - vr.DAY_START) * (bottom - top)
+
+    def _bar_minutes(self, y: float) -> float:
+        top, bottom = self._bar_geometry()
+        rel = min(max((y - top) / max(bottom - top, 1), 0.0), 1.0)
+        return vr.DAY_START + rel * (vr.DAY_END - vr.DAY_START)
+
+    def _draw_bar(self) -> None:
+        b = self.bar
+        b.delete("all")
+        top, bottom = self._bar_geometry()
+        tx0, tx1 = 52, 64  # the track
+        b.create_rectangle(tx0, top, tx1, bottom, fill="#f3f4f6", outline="#d1d5db")
+        b.create_text((tx0 + tx1) / 2, top - 12, text="Hours", fill="#6b7280", font=("TkDefaultFont", 8))
+        for m in range(vr.DAY_START, vr.DAY_END + 1, 180):  # small ticks every 3 hours
+            y = self._bar_y(m)
+            b.create_line(tx1, y, tx1 + 5, y, fill="#9ca3af")
+        y0, y1 = self._bar_y(self.view[0]), self._bar_y(self.view[1])
+        b.create_rectangle(tx0, y0, tx1, y1, fill="#bfdbfe", outline="#3b82f6", width=1)
+        for y, m in ((y0, self.view[0]), (y1, self.view[1])):
+            b.create_rectangle(tx0 - 4, y - 4, tx1 + 4, y + 4, fill="#3b82f6", outline="#1d4ed8")
+            b.create_text(tx0 - 8, y, text=vr.label(m), anchor="e", fill="#1f2937", font=("TkDefaultFont", 9, "bold"))
+
+    def on_bar_press(self, e) -> None:
+        y0, y1 = self._bar_y(self.view[0]), self._bar_y(self.view[1])
+        if abs(e.y - y0) <= 8:
+            self._bar_drag = ("start", 0.0)
+        elif abs(e.y - y1) <= 8:
+            self._bar_drag = ("end", 0.0)
+        elif y0 < e.y < y1:
+            self._bar_drag = ("band", self._bar_minutes(e.y) - self.view[0])
+        else:  # clicked outside the band: move the nearest handle there
+            self._bar_drag = ("start", 0.0) if e.y < y0 else ("end", 0.0)
+            self.on_bar_drag(e)
+
+    def on_bar_drag(self, e) -> None:
+        if not self._bar_drag:
+            return
+        kind, offset = self._bar_drag
+        m = self._bar_minutes(e.y)
+        if kind == "start":
+            new = vr.set_start(self.view, m)
+        elif kind == "end":
+            new = vr.set_end(self.view, m)
+        else:
+            new = vr.pan(self.view, round((m - offset - self.view[0]) / 30) * 30)
+        self.set_view(new, save=False)
+
+    def on_wheel(self, e, up: bool) -> None:
+        if e.state & 0x0001:  # Shift: previous / next week
+            self.shift_week(-1 if up else 1)
+            return
+        anchor = self._render.minutes_at(e.y) if self._render else sum(self.view) / 2
+        fit = vr.fit_view(self.view_cal.events)
+        self.set_view(vr.zoom(self.view, 0.8 if up else 1.25, anchor, fit))
+
+    def pan_view(self, delta: int) -> None:
+        self.set_view(vr.pan(self.view, delta))
+
+    def fit_to_entries(self) -> None:
+        fit = vr.fit_view(self.view_cal.events)
+        if fit:
+            self.set_view(fit)
+
+    def widen_view(self, events) -> None:
+        """Make room for newly added entries (the range never shrinks by itself)."""
+        self.set_view(vr.widen(self.view, vr.entries_span(events)))
+
+    def set_view(self, view: tuple[int, int], save: bool = True) -> None:
+        view = vr.clamp(view)
+        if view != self.view:
+            self.view = view
+            self.redraw()
+            self.status.config(text=f"Showing {vr.label(view[0])}–{vr.label(view[1])}  ·  mouse wheel zooms, "
+                                    "Shift + wheel changes the week, double-click the bar to fit all entries")
+            if save:
+                self._save_view_soon()
+
+    def _save_view_soon(self) -> None:
+        if self._save_view_job:
+            self.after_cancel(self._save_view_job)
+        self._save_view_job = self.after(400, self._save_view)
+
+    def _save_view(self) -> None:
+        self._save_view_job = None
+        try:
+            storage.save_view(self.view)
+        except OSError:
+            pass
 
     def _update_nav(self, dated: bool) -> None:
         state = "normal" if dated else "disabled"
@@ -298,6 +416,7 @@ class App(tk.Tk):
             self.status.config(text=f"Not added: {warnings[0]}")
             return
         added, _ = self.cal.add([ev])
+        self.widen_view([ev])
         if ev.dated:
             self.week = week_start(ev.date)
         self.changed()
@@ -391,6 +510,7 @@ class App(tk.Tk):
         ):
             return
         self.cal.replace_all(result.events, result.title)
+        self.widen_view(result.events)
         self.go_first()
         self.changed()
         self.show_warnings(result.warnings, f"Imported {len(self.cal.events)} events.")
@@ -400,6 +520,7 @@ class App(tk.Tk):
         if not result:
             return
         added, skipped = self.cal.add(result.events)
+        self.widen_view(result.events)
         if not self.cal.title and result.title:
             self.cal.title = result.title
         if added:
@@ -488,6 +609,9 @@ class App(tk.Tk):
             icon="warning",
         ):
             return
+        if self._save_view_job:  # don't recreate the folder right after removing it
+            self.after_cancel(self._save_view_job)
+            self._save_view_job = None
         storage.remove_all_data()
         messagebox.showinfo(
             "Data removed",
@@ -555,9 +679,10 @@ class ExportImageDialog(tk.Toplevel):
             if not path:
                 return
             if app.dated:
-                export_week(app.view_cal, app.week, path, scale, tags=tag_colors(app.cal))
+                export_week(app.view_cal, app.week, path, scale, tags=tag_colors(app.cal), view=app.view)
             else:
-                export_week(app.view_cal, PLANNER_WEEK, path, scale, show_dates=False, tags=tag_colors(app.cal))
+                export_week(app.view_cal, PLANNER_WEEK, path, scale, show_dates=False, tags=tag_colors(app.cal),
+                            view=app.view)
             app.status.config(text=f"Saved {path}")
         else:
             weeks = app.view_cal.weeks_with_events()
@@ -571,7 +696,7 @@ class ExportImageDialog(tk.Toplevel):
             self.update()
             for wk in weeks:
                 export_week(app.view_cal, wk, os.path.join(folder, f"{base}_{_week_label(wk)}{ext}"), scale,
-                            tags=tag_colors(app.cal))
+                            tags=tag_colors(app.cal), view=app.view)
             self.config(cursor="")
             app.status.config(text=f"Saved {len(weeks)} images to {folder}")
         self.destroy()
